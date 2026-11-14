@@ -103,6 +103,14 @@ export interface CloudSavePayload {
   difficulty?: DifficultyTier;
   /** Phase 4: epoch ms of first ending completion, once stamped. */
   completedAtMs?: number;
+  /** Phase 5: NG+ ascension cycle (absent => 0). */
+  ngPlusCycle?: number;
+  /** Phase 5: hardcore (permadeath) run flag (absent => false). */
+  hardcore?: boolean;
+  /** Phase 5: epoch ms of a hardcore run's final death (absent => alive). */
+  deadAtMs?: number;
+  /** Phase 5: short death note recorded with deadAtMs. */
+  deathNote?: string;
 }
 
 export interface CloudSaveSummary {
@@ -117,6 +125,14 @@ export interface CloudSaveSummary {
   updatedAtMs?: number;
   /** Phase 4: set when the run has reached the ending (completion stamp). */
   completedAtMs?: number;
+  /** Phase 5: NG+ ascension cycle (absent => 0). */
+  ngPlusCycle?: number;
+  /** Phase 5: hardcore (permadeath) run flag (absent => false). */
+  hardcore?: boolean;
+  /** Phase 5: epoch ms of a hardcore run's final death (absent => alive). */
+  deadAtMs?: number;
+  /** Phase 5: short death note recorded with deadAtMs. */
+  deathNote?: string;
 }
 
 export interface CloudSlotRecord {
@@ -321,6 +337,11 @@ function sanitizeForBlueprint(
       version: payload.version,
       difficulty: payload.difficulty,
       completedAtMs: payload.completedAtMs,
+      // Phase 5 fields ride along the same way.
+      ngPlusCycle: payload.ngPlusCycle,
+      hardcore: payload.hardcore,
+      deadAtMs: payload.deadAtMs,
+      deathNote: payload.deathNote,
     }),
   };
 }
@@ -432,6 +453,11 @@ async function readSingleSlot(
         updatedAtMs: updatedAt?.toMillis ? updatedAt.toMillis() : undefined,
         completedAtMs:
           typeof rawPayload.completedAtMs === 'number' ? rawPayload.completedAtMs : undefined,
+        ngPlusCycle:
+          typeof rawPayload.ngPlusCycle === 'number' ? rawPayload.ngPlusCycle : undefined,
+        hardcore: rawPayload.hardcore === true ? true : undefined,
+        deadAtMs: typeof rawPayload.deadAtMs === 'number' ? rawPayload.deadAtMs : undefined,
+        deathNote: typeof rawPayload.deathNote === 'string' ? rawPayload.deathNote : undefined,
       },
       payload: {
         ...(rawPayload as unknown as Omit<CloudSavePayload, 'zones'>),

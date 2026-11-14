@@ -7,6 +7,10 @@ interface EndingScreenProps {
   worldFlags: WorldFlags;
   /** Wall-clock duration of this expedition session, if tracked. */
   playTimeMs?: number | null;
+  /** Phase 5: the NG+ cycle this victory was won on (0 = first descent). */
+  ngPlusCycle?: number;
+  /** Phase 5: begin New Game+ at cycle + 1 (optional, like onShowCredits). */
+  onAscend?: () => void;
   onContinueAbyss: () => void;
   onOpenHallOfFame: () => void;
   /** Phase 4: open the credits roll (optional so older callers still work). */
@@ -77,6 +81,8 @@ export const EndingScreen: React.FC<EndingScreenProps> = ({
   derived,
   worldFlags,
   playTimeMs,
+  ngPlusCycle = 0,
+  onAscend,
   onContinueAbyss,
   onOpenHallOfFame,
   onShowCredits,
@@ -91,6 +97,9 @@ export const EndingScreen: React.FC<EndingScreenProps> = ({
   ];
   if (playTimeMs != null && playTimeMs > 0) {
     stats.push({ label: 'Expedition Time', value: formatPlayTime(playTimeMs) });
+  }
+  if (ngPlusCycle > 0) {
+    stats.push({ label: 'Ascension Cycle', value: `Cycle ${ngPlusCycle}` });
   }
 
   return (
@@ -122,10 +131,30 @@ export const EndingScreen: React.FC<EndingScreenProps> = ({
         </div>
 
         <div className="flex flex-col gap-2.5">
+          {onAscend && (
+            <div className="space-y-1.5">
+              <button
+                type="button"
+                onClick={onAscend}
+                className="min-h-[44px] w-full py-2.5 rounded bg-amber-500 hover:bg-amber-400 text-[#0B0D12] font-semibold text-sm cursor-pointer"
+              >
+                Begin New Game+ — Cycle {ngPlusCycle + 1}
+              </button>
+              <p className="text-[11px] text-slate-400 leading-snug text-center">
+                Keep your level, attributes, skills, equipment, gold, and companion. The world is
+                remade fresh — and every cycle its foes grow stronger (+35% HP, +25% ATK, +20% XP
+                per cycle).
+              </p>
+            </div>
+          )}
           <button
             type="button"
             onClick={onContinueAbyss}
-            className="min-h-[44px] w-full py-2.5 rounded bg-amber-500 hover:bg-amber-400 text-[#0B0D12] font-semibold text-sm cursor-pointer"
+            className={`min-h-[44px] w-full py-2.5 rounded font-semibold text-sm cursor-pointer ${
+              onAscend
+                ? 'border border-amber-400/50 bg-amber-500/15 hover:bg-amber-500/25 text-amber-200'
+                : 'bg-amber-500 hover:bg-amber-400 text-[#0B0D12]'
+            }`}
           >
             Continue into the Endless Abyss
           </button>

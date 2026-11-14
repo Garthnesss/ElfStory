@@ -132,3 +132,15 @@ for tier in ['story', 'hardened']:
     ehp, eatk, expm = TIERS[tier]
     s_hp, s_atk = round(m_hp * ehp), round(m_atk * eatk)
     print(f"  {tier.capitalize():>8}: Malakor HP {s_hp} ATK {s_atk} DEF {m_def} | player L13 dmg/hit {m_dmg:.0f} TTK {s_hp/m_dmg:.1f} | XP reward {round(m_xp*expm)} (x{expm}) | boss basic {max(1,s_atk-round(mp['def_']*0.65))}/hit vs player HP {mp['maxhp']}")
+
+# --- Phase 5 NG+ ascension cycles ----------------------------------------------
+# Cycle factors parsed from cycleMultipliers in difficulty.ts; they compose
+# multiplicatively with the tier above. Cycle 0 is exactly the Phase 4 game.
+CYC = (float(re.search(r"enemyHp: 1 \+ ([\d.]+) \* c", D).group(1)),
+       float(re.search(r"enemyAtk: 1 \+ ([\d.]+) \* c", D).group(1)),
+       float(re.search(r"xp: 1 \+ ([\d.]+) \* c", D).group(1)))
+print(f"\nNG+ ascension (Phase 5, per-cycle factors parsed from difficulty.ts): HP +{CYC[0]}, ATK +{CYC[1]}, XP +{CYC[2]}")
+for cyc in [1, 3]:
+    f_hp, f_atk, f_xp = 1 + CYC[0]*cyc, 1 + CYC[1]*cyc, 1 + CYC[2]*cyc
+    n_hp, n_atk = round(m_hp * f_hp), round(m_atk * f_atk)
+    print(f"  NG+{cyc} (Standard, cycle {cyc}): Malakor HP {n_hp} ATK {n_atk} DEF {m_def} | player L13 dmg/hit {m_dmg:.0f} TTK {n_hp/m_dmg:.1f} | XP reward {round(m_xp*f_xp)} (x{f_xp}) | boss basic {max(1,n_atk-round(mp['def_']*0.65))}/hit vs player HP {mp['maxhp']}")

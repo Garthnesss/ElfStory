@@ -81,36 +81,78 @@ export function getCurrentDifficulty(): DifficultyTier {
   return currentDifficulty;
 }
 
-// ------------------------------------------------------------ scaling
+// ------------------------------------------- NG+ ascension cycles (Phase 5)
+//
+// After a victory the player may ascend: the world is rebuilt fresh while
+// the character carries over, and every cycle makes the remade world
+// stronger — HP ×(1 + 0.35·cycle), ATK ×(1 + 0.25·cycle), XP ×(1 + 0.20·cycle).
+// Cycle scaling composes MULTIPLICATIVELY with the difficulty tier inside
+// the same two funnels below (scaleEnemyForDifficulty / scaleXpForDifficulty),
+// so there is still exactly one scaling application point. At cycle 0 every
+// factor is exactly 1 and the game is bit-for-bit the Phase 4 game.
 
-/**
- * Apply a tier's enemy multipliers to a freshly created enemy. This is the
- * single helper every spawn path funnels through (createEnemy calls it, so
- * regular spawns, story bosses, elites, side bosses and Abyss spawns are
- * all covered; rank promotion and side-boss tuning multiply on top of the
- * already-scaled base). At Standard the enemy is returned unchanged.
- */
-export function scaleEnemyForDifficulty(
-  enemy: Enemy,
-  tier: DifficultyTier = currentDifficulty
-): Enemy {
-  const mult = DIFFICULTY_MULTIPLIERS[tier];
-  if (mult.enemyHp === 1 && mult.enemyAtk === 1) return enemy;
-  const maxHp = Math.max(1, Math.round(enemy.maxHp * mult.enemyHp));
+/** Normalize an arbitrary stored value into a valid cycle count. */
+export function normalizeCycle(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
+  return Math.max(0, Math.floor(value));
+}
+
+/** The ascension multipliers for a given NG+ cycle (cycle 0 = all 1.0). */
+export function cycleMultipliers(cycle: number): DifficultyMultipliers {
+  const c = normalizeCycle(cycle);
   return {
-    ...enemy,
-    maxHp,
-    hp: Math.max(1, Math.round(enemy.hp * mult.enemyHp)),
-    atk: Math.max(1, Math.round(enemy.atk * mult.enemyAtk)),
+    enemyHp: 1 + 0.35 * c,
+    enemyAtk: 1 + 0.25 * c,
+    xp: 1 + 0.2 * c,
   };
 }
 
-/** Apply a tier's XP multiplier inside the XP grant function. */
+let currentCycle = 0;
+
+export function setCurrentCycle(cycle: number): void {
+  currentCycle = normalizeCycle(cycle);
+}
+
+export function getCurrentCycle(): number {
+  return currentCycle;
+}
+
+// ------------------------------------------------------------ scaling
+
+/**
+ * Apply the active difficulty tier AND NG+ cycle multipliers to a freshly
+ * created enemy. This is the single helper every spawn path funnels
+ * through (createEnemy calls it, so regular spawns, story bosses, elites,
+ * side bosses and Abyss spawns are all covered; rank promotion and
+ * side-boss tuning multiply on top of the already-scaled base). At
+ * Standard + cycle 0 the enemy is returned unchanged.
+ */
+export function scaleEnemyForDifficulty(
+  enemy: Enemy,
+  tier: DifficultyTier = currentDifficulty,
+  cycle: number = currentCycle
+): Enemy {
+  const tierMult = DIFFICULTY_MULTIPLIERS[tier];
+  const cycleMult = cycleMultipliers(cycle);
+  const hpMult = tierMult.enemyHp * cycleMult.enemyHp;
+  const atkMult = tierMult.enemyAtk * cycleMult.enemyAtk;
+  if (hpMult === 1 && atkMult === 1) return enemy;
+  const maxHp = Math.max(1, Math.round(enemy.maxHp * hpMult));
+  return {
+    ...enemy,
+    maxHp,
+    hp: Math.max(1, Math.round(enemy.hp * hpMult)),
+    atk: Math.max(1, Math.round(enemy.atk * atkMult)),
+  };
+}
+
+/** Apply the tier × cycle XP multipliers inside the XP grant function. */
 export function scaleXpForDifficulty(
   xp: number,
-  tier: DifficultyTier = currentDifficulty
+  tier: DifficultyTier = currentDifficulty,
+  cycle: number = currentCycle
 ): number {
-  const mult = DIFFICULTY_MULTIPLIERS[tier].xp;
+  const mult = DIFFICULTY_MULTIPLIERS[tier].xp * cycleMultipliers(cycle).xp;
   if (mult === 1) return xp;
   return Math.round(xp * mult);
 }

@@ -15,7 +15,7 @@
 // The pure parse/validate logic takes raw strings / an injectable storage
 // so it is unit-testable without a DOM (same pattern as settings.ts).
 
-import { DifficultyTier, normalizeDifficulty } from './difficulty';
+import { DifficultyTier, normalizeCycle, normalizeDifficulty } from './difficulty';
 import { StorageLike } from './settings';
 import {
   Item,
@@ -53,6 +53,18 @@ export interface SavedBundle {
   /** Epoch ms when the run first reached the ending (Phase 4 completion
    *  stamp). Absent until the Sovereign falls; survives Abyss continuation. */
   completedAtMs?: number;
+  /** NG+ ascension cycle (Phase 5). Absent on pre-P5 bundles => cycle 0.
+   *  Optional-with-default, so SAVE_VERSION stays 1. */
+  ngPlusCycle?: number;
+  /** Hardcore (permadeath) run (Phase 5). Set only at run creation; absent
+   *  on pre-P5 bundles => false. */
+  hardcore?: boolean;
+  /** Epoch ms of a hardcore run's final death (Phase 5). Once stamped the
+   *  run is fallen: the slot renders as fallen and can never be loaded. */
+  deadAtMs?: number;
+  /** Short human-readable death note (floor / zone / cycle) recorded with
+   *  deadAtMs for the Title Screen's fallen-slot line. */
+  deathNote?: string;
 }
 
 export function getLocalSlotKey(slotId: SaveSlotId): string {
@@ -164,4 +176,48 @@ export function withCompletionStamp(bundle: SavedBundle, nowMs: number): SavedBu
 /** The difficulty a bundle plays at — legacy bundles default to Standard. */
 export function bundleDifficulty(bundle: SavedBundle): DifficultyTier {
   return normalizeDifficulty(bundle.difficulty);
+}
+
+// ------------------------------------------------------------- Phase 5
+
+/** The NG+ cycle a bundle is on — pre-P5 bundles default to cycle 0. */
+export function bundleCycle(bundle: SavedBundle): number {
+  return normalizeCycle(bundle.ngPlusCycle);
+}
+
+/** Whether a bundle is a hardcore (permadeath) run. Default false. */
+export function bundleHardcore(bundle: SavedBundle): boolean {
+  return bundle.hardcore === true;
+}
+
+/** Whether a bundle is a fallen hardcore run (death stamp present). */
+export function isBundleDead(bundle: SavedBundle): boolean {
+  return typeof bundle.deadAtMs === 'number';
+}
+
+/**
+ * Load policy for a parsed bundle: everything loads except a fallen
+ * hardcore run — death is final, so a dead bundle can be deleted but
+ * never resumed.
+ */
+export function canLoadBundle(bundle: SavedBundle): boolean {
+  return !isBundleDead(bundle);
+}
+
+export function fallenBundleMessage(bundle: SavedBundle): string {
+  const note = bundle.deathNote ? ` ${bundle.deathNote}.` : '';
+  return `This delver has fallen — in Hardcore, death is final.${note} The slot can be deleted, but the run cannot be resumed.`;
+}
+
+/**
+ * Stamp a bundle with its final death (hardcore). Idempotent: the FIRST
+ * death stamp wins, so later saves of the fallen run never move it.
+ */
+export function withDeathStamp(
+  bundle: SavedBundle,
+  nowMs: number,
+  deathNote?: string
+): SavedBundle {
+  if (isBundleDead(bundle)) return bundle;
+  return { ...bundle, deadAtMs: nowMs, deathNote };
 }

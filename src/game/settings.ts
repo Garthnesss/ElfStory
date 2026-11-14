@@ -167,6 +167,42 @@ export function formatKeyLabel(key: string): string {
   return key;
 }
 
+// ------------------------------------------------------- accessibility
+// Phase 6 "reach & refinement": UI text size and pattern signals.
+
+export type TextSize = 'compact' | 'standard' | 'large';
+
+export const TEXT_SIZE_OPTIONS: readonly TextSize[] = ['compact', 'standard', 'large'];
+
+export const TEXT_SIZE_LABELS: Record<TextSize, string> = {
+  compact: 'Compact',
+  standard: 'Standard',
+  large: 'Large',
+};
+
+export function isTextSize(value: unknown): value is TextSize {
+  return value === 'compact' || value === 'standard' || value === 'large';
+}
+
+/**
+ * Root font size (px) for a text-size choice. App applies this to
+ * <html>, which scales every rem-based UI text size in one move; the
+ * canvas map renders in fixed pixels and is deliberately unaffected.
+ */
+export function textSizeRootPx(size: TextSize): number {
+  return size === 'compact' ? 14 : size === 'large' ? 18 : 16;
+}
+
+/**
+ * The canvas pattern-signal decision, factored pure so it is testable:
+ * the "!" marker is drawn on a telegraph tile exactly when the player
+ * has pattern signals on and the tile is telegraphed. When the setting
+ * is off, telegraph rendering is byte-for-byte the pre-Phase-6 wash.
+ */
+export function shouldDrawTelegraphMarker(patternSignals: boolean, isTelegraphTile: boolean): boolean {
+  return patternSignals && isTelegraphTile;
+}
+
 export interface GameSettings {
   /** SFX volume, 0..1. */
   sfxVolume: number;
@@ -178,6 +214,11 @@ export interface GameSettings {
   screenShake: boolean;
   /** Remappable keyboard bindings (Phase 4), merged over defaults on load. */
   keymap: Keymap;
+  /** UI text size (Phase 6 accessibility), applied as a root font scale. */
+  textSize: TextSize;
+  /** Phase 6 accessibility: draw a "!" marker on telegraphed danger
+   *  tiles so incoming attacks are never signalled by colour alone. */
+  patternSignals: boolean;
 }
 
 export const DEFAULT_SETTINGS: GameSettings = {
@@ -186,6 +227,8 @@ export const DEFAULT_SETTINGS: GameSettings = {
   muted: false,
   screenShake: true,
   keymap: DEFAULT_KEYMAP,
+  textSize: 'standard',
+  patternSignals: true,
 };
 
 export const SETTINGS_KEY = 'elfstory-settings';
@@ -251,6 +294,10 @@ export function loadSettings(storage: StorageLike | null = defaultStorage()): Ga
     out.musicVolume = clampVolume(parsed.musicVolume, out.musicVolume);
     out.muted = asBoolean(parsed.muted, out.muted);
     out.screenShake = asBoolean(parsed.screenShake, out.screenShake);
+    // Phase 6 accessibility fields: blobs written before Phase 6 simply
+    // lack them and hydrate to the defaults (Standard text, signals on).
+    out.textSize = isTextSize(parsed.textSize) ? parsed.textSize : out.textSize;
+    out.patternSignals = asBoolean(parsed.patternSignals, out.patternSignals);
     // Keymap merges over defaults, so blobs written before Phase 4 (or
     // with a partial/hostile keymap) hydrate to a complete binding set.
     out.keymap = mergeKeymap(parsed.keymap);

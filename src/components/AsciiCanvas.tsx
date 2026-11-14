@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Eye, Map as MapIcon, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { chebyshev, findPathPoints } from '../game/combat';
+import { shouldDrawTelegraphMarker } from '../game/settings';
 import { SKILLS } from '../game/skills';
 import {
   getCompanionSprite,
@@ -50,6 +51,10 @@ interface AsciiCanvasProps {
   /** Controlled tile zoom (Phase 2 settings). When omitted, the canvas
    *  manages its own persisted zoom exactly as before. */
   tileSize?: number;
+  /** Phase 6 accessibility: when on (the default), telegraphed danger
+   *  tiles also draw a "!" marker so they are never signalled by the
+   *  red colour wash alone. When off, telegraph rendering is unchanged. */
+  patternSignals?: boolean;
   onTileSizeChange?: (tileSize: number) => void;
   onTileClick: (x: number, y: number) => void;
   onStep?: (dx: number, dy: number) => void;
@@ -155,6 +160,7 @@ export const AsciiCanvas: React.FC<AsciiCanvasProps> = ({
   hitFlashes,
   shakeUntil,
   tileSize: controlledTileSize,
+  patternSignals,
   onTileSizeChange,
   onTileClick,
   onStep,
@@ -215,6 +221,7 @@ export const AsciiCanvas: React.FC<AsciiCanvasProps> = ({
     projectiles,
     hitFlashes,
     shakeUntil,
+    patternSignals: patternSignals ?? true,
     tileSize: 36,
     showMobileMap: false,
     hoverCoord: null as { x: number; y: number } | null,
@@ -236,6 +243,7 @@ export const AsciiCanvas: React.FC<AsciiCanvasProps> = ({
     stateRef.current.projectiles = projectiles;
     stateRef.current.hitFlashes = hitFlashes;
     stateRef.current.shakeUntil = shakeUntil;
+    stateRef.current.patternSignals = patternSignals ?? true;
     stateRef.current.tileSize = tileSize;
     stateRef.current.showMobileMap = showMobileMap;
 
@@ -252,7 +260,7 @@ export const AsciiCanvas: React.FC<AsciiCanvasProps> = ({
     } else {
       stateRef.current.hoverPath = [];
     }
-  }, [zone, player, armedSkill, armedInscriptionRange, aimedTarget, floatingEffects, particles, projectiles, hitFlashes, shakeUntil, tileSize, showMobileMap]);
+  }, [zone, player, armedSkill, armedInscriptionRange, aimedTarget, floatingEffects, particles, projectiles, hitFlashes, shakeUntil, patternSignals, tileSize, showMobileMap]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -629,6 +637,16 @@ export const AsciiCanvas: React.FC<AsciiCanvasProps> = ({
             ctx.strokeStyle = 'rgba(248, 113, 113, 0.9)';
             ctx.lineWidth = 1.5;
             ctx.strokeRect(px + 1.5, py + 1.5, TILE_SIZE - 3, TILE_SIZE - 3);
+            // Phase 6 pattern signals: a "!" glyph over the colour wash,
+            // so a telegraphed tile reads as danger without relying on
+            // red alone. Off = the wash exactly as before.
+            if (shouldDrawTelegraphMarker(s.patternSignals, true)) {
+              ctx.fillStyle = 'rgba(254, 242, 242, 0.95)';
+              ctx.font = `700 ${Math.max(10, Math.round(TILE_SIZE * 0.52))}px "JetBrains Mono", monospace`;
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillText('!', px + TILE_SIZE / 2, py + TILE_SIZE / 2 + 1);
+            }
           }
 
           if (s.armedSkill && tile.visible && tile.walkable) {

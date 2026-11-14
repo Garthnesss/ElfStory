@@ -27,6 +27,7 @@ import {
   DifficultyTier,
   normalizeDifficulty,
   scaleXpForDifficulty,
+  setCurrentCycle,
   setCurrentDifficulty,
 } from './game/difficulty';
 import {
@@ -34,13 +35,26 @@ import {
   SAVE_VERSION,
   SavedBundle,
   SlotIssue,
+  bundleCycle,
   bundleDifficulty,
+  bundleHardcore,
+  canLoadBundle,
   corruptSlotMessage,
+  fallenBundleMessage,
   getLocalSlotKey,
+  isBundleDead,
   parseStoredBundle,
   readAllSlotStates,
   stampBundle,
 } from './game/saveSlots';
+import {
+  LifetimeEvent,
+  LifetimeStats,
+  applyLifetimeEvent,
+  deepestDepthForZones,
+  loadLifetime,
+  saveLifetime,
+} from './game/lifetime';
 import {
   GameSettings,
   isTutorialDone,
@@ -50,7 +64,10 @@ import {
   resolveKeyAction,
   saveSettings,
   saveTileSize,
+  textSizeRootPx,
 } from './game/settings';
+import { GamepadAction, GamepadPoller } from './game/gamepad';
+import { COACH_MARKS, CoachMarkId, claimCoachMark } from './game/coachMarks';
 import {
   countConsumables,
   isTutorialStepComplete,
@@ -185,6 +202,10 @@ function makeLocalSummary(slotId: SaveSlotId, bundle: SavedBundle): LocalSlotSum
     updatedAtMs: bundle.updatedAtMs,
     completedAtMs: bundle.completedAtMs,
     difficulty: bundleDifficulty(bundle),
+    ngPlusCycle: bundleCycle(bundle),
+    hardcore: bundleHardcore(bundle),
+    deadAtMs: bundle.deadAtMs,
+    deathNote: bundle.deathNote,
   };
 }
 
@@ -402,6 +423,12 @@ export default function App() {
   useEffect(() => {
     settingsRef.current = settings;
   }, [settings]);
+  // Phase 6 accessibility: the text-size setting scales the root font
+  // size, which scales all rem-based UI text in one move. The canvas map
+  // renders in fixed pixels and is deliberately unaffected.
+  useEffect(() => {
+    document.documentElement.style.fontSize = `${textSizeRootPx(settings.textSize)}px`;
+  }, [settings.textSize]);
   const updateSettings = useCallback((patch: Partial<GameSettings>) => {
     setSettings((prev) => {
       const next = { ...prev, ...patch };
@@ -488,6 +515,42 @@ export default function App() {
     completedAtMsRef.current = value;
     setCompletedAtMs(value);
   }, []);
+
+  // Phase 5 ascension: the run's NG+ cycle and hardcore flag live in the
+  // save bundle (per-run, like difficulty). The cycle also mirrors into
+  // the difficulty module, where world generation reads it. applyCycle /
+  // applyHardcore are the single write paths, mirroring applyDifficulty.
+  const [ngPlusCycle, setNgPlusCycle] = useState(0);
+  const ngPlusCycleRef = useRef(0);
+  const applyCycle = useCallback((cycle: number) => {
+    const clean = Math.max(0, Math.floor(cycle) || 0);
+    ngPlusCycleRef.current = clean;
+    setCurrentCycle(clean);
+    setNgPlusCycle(clean);
+  }, []);
+  const [hardcore, setHardcore] = useState(false);
+  const hardcoreRef = useRef(false);
+  const applyHardcore = useCallback((value: boolean) => {
+    hardcoreRef.current = value;
+    setHardcore(value);
+  }, []);
+  // A hardcore run's final death stamp (null while the run lives). Set
+  // once by the GAME_OVER effect below; saveBundleToStorage defaults it
+  // into every later save so the fallen state can never be overwritten.
+  const deathStampRef = useRef<{ deadAtMs: number; deathNote?: string } | null>(null);
+
+  // Phase 5 lifetime stats: per-device record kept OUTSIDE save bundles
+  // (game/lifetime.ts). Mirrored in a ref so event funnels inside stable
+  // callbacks always read the freshest totals.
+  const [lifetime, setLifetime] = useState<LifetimeStats>(() => loadLifetime());
+  const lifetimeRef = useRef(lifetime);
+  const bumpLifetime = useCallback((event: LifetimeEvent) => {
+    const next = applyLifetimeEvent(lifetimeRef.current, event);
+    if (next === lifetimeRef.current) return;
+    lifetimeRef.current = next;
+    setLifetime(next);
+    saveLifetime(next);
+  }, []);
   const [cloudSlotMap, setCloudSlotMap] = useState<
     Partial<Record<SaveSlotId, { summary: CloudSaveSummary; payload: CloudSavePayload }>>
   >({});
@@ -503,6 +566,9 @@ export default function App() {
     tactical: string;
     recommended: string;
   } | null>(null);
+  // Phase 6 coach-mark toast: same non-blocking banner idiom as the zone
+  // banner, fed by the pendingCoachMarksRef queue.
+  const [coachToast, setCoachToast] = useState<{ title: string; body: string } | null>(null);
   const dpadHoldTimerRef = useRef<number | null>(null);
   const dpadHoldIntervalRef = useRef<number | null>(null);
 
@@ -553,6 +619,23 @@ export default function App() {
     const t = window.setTimeout(() => setZoneBanner(null), 4600);
     return () => window.clearTimeout(t);
   }, [zoneBanner]);
+
+  // Phase 6: flush queued coach-marks, one per render pass — each becomes
+  // a log line plus the toast card. The pushLog re-render drains any
+  // further queued marks immediately after.
+  useEffect(() => {
+    if (pendingCoachMarksRef.current.length === 0) return;
+    const [id] = pendingCoachMarksRef.current.splice(0, 1);
+    const mark = COACH_MARKS[id];
+    pushLog(`Lantern hint — ${mark.body}`, 'arcane');
+    setCoachToast({ title: mark.title, body: mark.body });
+  });
+
+  useEffect(() => {
+    if (!coachToast) return;
+    const t = window.setTimeout(() => setCoachToast(null), 5600);
+    return () => window.clearTimeout(t);
+  }, [coachToast]);
 
   useEffect(() => stopDpadHold, [stopDpadHold]);
 
@@ -696,6 +779,16 @@ export default function App() {
     ]);
   }, [player.turnsElapsed]);
 
+  // Phase 6 contextual coach-marks: event points claim a one-time hint
+  // (game/coachMarks.ts) and queue it here; the flush effect below turns
+  // the queue into a log line + toast. Claiming only touches localStorage
+  // and this ref, so it is safe to call from state-computing callbacks
+  // (addItemToPlayer runs inside a setPlayer updater at the merchant).
+  const pendingCoachMarksRef = useRef<CoachMarkId[]>([]);
+  const queueCoachMark = useCallback((id: CoachMarkId) => {
+    if (claimCoachMark(id)) pendingCoachMarksRef.current.push(id);
+  }, []);
+
   // Phase 4: mid-run difficulty change from the Settings modal. Only
   // enemies spawned after the change use the new tier — zones already
   // generated keep their enemies' stats (called out in the modal copy).
@@ -832,6 +925,17 @@ export default function App() {
         createdAtMs: Date.now(),
       };
 
+      // Phase 5: a chronicle entry is written exactly once per run ending,
+      // so this is the single funnel for lifetime victory/death counting —
+      // plus the deepest floor and NG+ cycle the run reached.
+      if (outcome === 'victory') {
+        bumpLifetime({ kind: 'victory' });
+      } else {
+        bumpLifetime({ kind: 'death' });
+      }
+      bumpLifetime({ kind: 'floorReached', depth: deepestDepth });
+      bumpLifetime({ kind: 'cycleReached', cycle: ngPlusCycleRef.current });
+
       setLocalChronicles((prev) => {
         const next = [entry, ...prev].slice(0, 30);
         try {
@@ -856,7 +960,7 @@ export default function App() {
           });
       }
     },
-    [authUser, currentZone.depth, pushLog]
+    [authUser, bumpLifetime, currentZone.depth, pushLog]
   );
 
   const saveBundleToStorage = useCallback(
@@ -874,6 +978,13 @@ export default function App() {
         ...stampBundle(bundle),
         difficulty: bundle.difficulty ?? difficultyRef.current,
         completedAtMs: bundle.completedAtMs ?? completedAtMsRef.current ?? undefined,
+        // Phase 5: cycle / hardcore / death stamp default from the live
+        // run's refs, exactly like the completion stamp — a bundle field
+        // already set always wins.
+        ngPlusCycle: bundle.ngPlusCycle ?? ngPlusCycleRef.current,
+        hardcore: bundle.hardcore ?? hardcoreRef.current,
+        deadAtMs: bundle.deadAtMs ?? deathStampRef.current?.deadAtMs ?? undefined,
+        deathNote: bundle.deathNote ?? deathStampRef.current?.deathNote ?? undefined,
         updatedAtMs: Date.now(),
       };
       const compactForLocal = {
@@ -899,6 +1010,10 @@ export default function App() {
               updatedAtMs: stamped.updatedAtMs,
               completedAtMs: stamped.completedAtMs,
               difficulty: stamped.difficulty,
+              ngPlusCycle: stamped.ngPlusCycle,
+              hardcore: stamped.hardcore,
+              deadAtMs: stamped.deadAtMs,
+              deathNote: stamped.deathNote,
             },
             bundle: stamped,
           },
@@ -936,6 +1051,10 @@ export default function App() {
                   gold: bundle.player.gold,
                   updatedAtMs: Date.now(),
                   completedAtMs: stamped.completedAtMs,
+                  ngPlusCycle: stamped.ngPlusCycle,
+                  hardcore: stamped.hardcore,
+                  deadAtMs: stamped.deadAtMs,
+                  deathNote: stamped.deathNote,
                 },
                 payload: stamped,
               },
@@ -1059,6 +1178,53 @@ export default function App() {
   ]);
   // --- End completion stamp -------------------------------------------------
 
+  // --- Hardcore death stamp (P5) -------------------------------------------
+  // In a hardcore run, reaching GAME_OVER is final: stamp the run's death
+  // onto its save slot and persist immediately, so the Title Screen shows
+  // the slot as fallen and the run can never be loaded again. Non-hardcore
+  // runs skip this entirely — their game-over flow is untouched. The stamp
+  // is set once (ref-guarded) and then rides every later save via
+  // saveBundleToStorage's ref defaulting.
+  useEffect(() => {
+    if (gameState !== 'GAME_OVER') return;
+    if (!hardcoreRef.current) return;
+    if (deathStampRef.current) return;
+    const s = autosaveStateRef.current;
+    if (!s) return;
+    const zone = s.zones[s.currentZoneId];
+    const deepest = deepestDepthForZones(s.worldFlags.discoveredZones, zone?.depth ?? 0);
+    deathStampRef.current = {
+      deadAtMs: Date.now(),
+      deathNote: `Fell on Floor ${deepest} · ${zone?.name ?? 'the deep'}`,
+    };
+    saveBundleToStorage(
+      {
+        player: s.player,
+        zones: s.zones,
+        currentZoneId: s.currentZoneId,
+        worldFlags: s.worldFlags,
+        quests: s.quests,
+        merchantStocks: s.merchantStocks,
+        logs: s.logs,
+      },
+      undefined,
+      activeSlot
+    );
+  }, [gameState, activeSlot, saveBundleToStorage]);
+  // --- End hardcore death stamp --------------------------------------------
+
+  // --- Lifetime deepest floor (P5) -----------------------------------------
+  // Track the deepest floor as it is reached, not just at a run's end, so
+  // an in-progress (or quietly abandoned) delve still counts.
+  useEffect(() => {
+    if (gameState !== 'PLAYING') return;
+    const deepest = deepestDepthForZones(worldFlags.discoveredZones, currentZone.depth);
+    if (deepest > lifetimeRef.current.deepestFloor) {
+      bumpLifetime({ kind: 'floorReached', depth: deepest });
+    }
+  }, [gameState, currentZoneId, currentZone.depth, worldFlags.discoveredZones, bumpLifetime]);
+  // --- End lifetime deepest floor ------------------------------------------
+
   const handleSignInGoogle = useCallback(async () => {
     setAuthBusy(true);
     setAuthError(null);
@@ -1089,7 +1255,8 @@ export default function App() {
     (
       starterClass: PlayerState['starterClass'],
       slotOverride?: SaveSlotId,
-      difficultyChoice?: DifficultyTier
+      difficultyChoice?: DifficultyTier,
+      hardcoreChoice?: boolean
     ) => {
       // Destructive-action guard: starting fresh over an occupied slot
       // (from the Title Screen's New Adventure, or Play Again on the
@@ -1111,6 +1278,14 @@ export default function App() {
       // keeps the current run's tier. A fresh run has no completion stamp.
       applyDifficulty(difficultyChoice ?? difficultyRef.current);
       updateCompletedAtMs(null);
+      // Phase 5: a fresh expedition always starts at NG+ cycle 0 with no
+      // death stamp. Hardcore is chosen at run creation only (the Title
+      // Screen toggle); Play Again passes no choice and keeps the mode of
+      // the run it replaces, mirroring the difficulty rule above.
+      applyCycle(0);
+      applyHardcore(hardcoreChoice ?? hardcoreRef.current);
+      deathStampRef.current = null;
+      bumpLifetime({ kind: 'expeditionStarted' });
       const freshZones = createInitialZones();
       const freshPlayer = createInitialPlayer(starterClass);
       const initialFlags = createInitialFlags();
@@ -1162,10 +1337,26 @@ export default function App() {
       setTutorialStepIdx(isTutorialDone() ? null : 0);
       setGameState('PLAYING');
     },
-    [activeSlot, applyDifficulty, cloudSlotMap, localSlotMap, updateCompletedAtMs]
+    [
+      activeSlot,
+      applyCycle,
+      applyDifficulty,
+      applyHardcore,
+      bumpLifetime,
+      cloudSlotMap,
+      localSlotMap,
+      updateCompletedAtMs,
+    ]
   );
 
   const applySavedBundle = useCallback((data: SavedBundle, slotId: SaveSlotId) => {
+    // Phase 5: a fallen hardcore run is never resumed — death is final.
+    // (The Title Screen also disables its Load buttons; this is the
+    // defence-in-depth guard for every other entry point.)
+    if (!canLoadBundle(data)) {
+      window.alert(fallenBundleMessage(data));
+      return;
+    }
     setActiveSlot(slotId);
     recordedVictoryRef.current = Boolean(data.worldFlags?.malakorDefeated);
     recordedFallenRef.current = false;
@@ -1173,6 +1364,14 @@ export default function App() {
     // to Standard) and its completion stamp, if it has one.
     applyDifficulty(normalizeDifficulty(data.difficulty));
     updateCompletedAtMs(data.completedAtMs ?? null);
+    // Phase 5: restore the run's NG+ cycle (pre-P5 bundles => 0) and its
+    // hardcore flag (pre-P5 bundles => false).
+    applyCycle(bundleCycle(data));
+    applyHardcore(bundleHardcore(data));
+    deathStampRef.current = isBundleDead(data)
+      ? { deadAtMs: data.deadAtMs!, deathNote: data.deathNote }
+      : null;
+    bumpLifetime({ kind: 'cycleReached', cycle: bundleCycle(data) });
     const defaultCompanionKind: CompanionKind =
       data.player.starterClass === 'Runecaster' ? 'starlight_owl' : 'silverwind_lynx';
     const normalizedPlayer: PlayerState = {
@@ -1222,7 +1421,120 @@ export default function App() {
     setTutorialStepIdx(null);
     setGameState('PLAYING');
     soundEngine.playClick();
-  }, [applyDifficulty, updateCompletedAtMs]);
+  }, [applyCycle, applyDifficulty, applyHardcore, bumpLifetime, updateCompletedAtMs]);
+
+  // Phase 5: New Game+ ascension. The world is rebuilt completely fresh
+  // (the same construction a new expedition uses) while the character
+  // carries over: level, attributes, skill points/skills, equipment,
+  // inventory, gold, glyph dust, and companion. Per-cycle run state
+  // (kills, turns, quests, flags, merchants) resets; difficulty, hardcore,
+  // and the completion stamp carry over. The new cycle is applied BEFORE
+  // the fresh world is generated, so every foe in it is cycle-scaled.
+  const handleAscendNgPlus = useCallback(() => {
+    const nextCycle = ngPlusCycleRef.current + 1;
+    soundEngine.playLevelUp();
+    applyCycle(nextCycle);
+    const freshZones = createInitialZones();
+    const freshFlags = createInitialFlags();
+    const freshMerchants = createInitialMerchants();
+
+    const kept = player;
+    const spawn = freshZones.oakhaven.spawnPoint;
+    const compPos = placeCompanionNear(freshZones.oakhaven, spawn.x, spawn.y);
+    const companion = kept.companion
+      ? {
+          ...kept.companion,
+          x: compPos.x,
+          y: compPos.y,
+          maxHp: companionMaxHpFor(kept.companion.kind, kept.level),
+          hp: companionMaxHpFor(kept.companion.kind, kept.level),
+          respawnCooldown: 0,
+        }
+      : kept.companion;
+    const carried: PlayerState = {
+      ...kept,
+      x: spawn.x,
+      y: spawn.y,
+      statuses: [],
+      cooldowns: {},
+      inscriptionCooldowns: [0, 0, 0],
+      prodigyCooldowns: {},
+      hasteSteps: 0,
+      kills: 0,
+      turnsElapsed: 0,
+      firstStrikeReady: true,
+      companion,
+    };
+    const derivedNow = computeDerivedStats(carried, freshFlags);
+    carried.maxHp = derivedNow.maxHp;
+    carried.hp = derivedNow.maxHp;
+    carried.maxMana = derivedNow.maxMana;
+    carried.mana = derivedNow.maxMana;
+    computeVisibility(freshZones.oakhaven, carried.x, carried.y, getSightRadius(carried, freshFlags));
+
+    recordedVictoryRef.current = false;
+    recordedFallenRef.current = false;
+    deathStampRef.current = null;
+    setZones(freshZones);
+    setPlayer(carried);
+    setCurrentZoneId('oakhaven');
+    setWorldFlags(freshFlags);
+    setQuests({});
+    setMerchantStocks(freshMerchants);
+    setArmedSkill(null);
+    setArmedInscriptionSlot(null);
+    setAimedTarget(null);
+    setAutoExploring(false);
+    setActivePanel('NONE');
+    setActiveDialogue(null);
+    setActiveMerchantId(null);
+    setSpecialPrompt(null);
+    const oakhavenCtx = getZoneContext('oakhaven', 0);
+    setZoneBanner({
+      name: freshZones.oakhaven.name,
+      subtitle: freshZones.oakhaven.subtitle,
+      ...oakhavenCtx,
+    });
+    const ascendLogs: LogEntry[] = [
+      {
+        id: uid('log'),
+        turn: 0,
+        text: `The Ashen Glyph turns once more. Garth Elfstrom ascends to Cycle ${nextCycle} — the Vale is remade, its foes hardened, and everything earned is carried into the new descent.`,
+        tone: 'quest',
+      },
+      {
+        id: uid('log'),
+        turn: 0,
+        text: oakhavenCtx.tactical,
+        tone: 'neutral',
+      },
+    ];
+    setLogs(ascendLogs);
+    runStartedAtRef.current = Date.now();
+    setTutorialStepIdx(null);
+    bumpLifetime({ kind: 'expeditionStarted' });
+    bumpLifetime({ kind: 'cycleReached', cycle: nextCycle });
+    setGameState('PLAYING');
+    // Persist immediately, so the ascended run is the slot's state even if
+    // the tab closes before the next autosave.
+    saveBundleToStorage(
+      {
+        player: carried,
+        zones: freshZones,
+        currentZoneId: 'oakhaven',
+        worldFlags: freshFlags,
+        quests: {},
+        merchantStocks: freshMerchants,
+        logs: ascendLogs,
+        ngPlusCycle: nextCycle,
+        hardcore: hardcoreRef.current,
+        difficulty: difficultyRef.current,
+        completedAtMs: completedAtMsRef.current ?? undefined,
+      },
+      undefined,
+      activeSlot
+    );
+  }, [activeSlot, applyCycle, bumpLifetime, player, saveBundleToStorage]);
 
   const handleContinueSaved = useCallback(
     (slotId: SaveSlotId) => {
@@ -1364,12 +1676,21 @@ export default function App() {
         }
         leveledUp = true;
       }
+      // Phase 6 coach-mark: the first Prodigy point ever earned opens a
+      // choice (Skills → Milestone Prodigies) — hint once, here in the
+      // single XP funnel so every grant path is covered.
+      if ((p.prodigyPoints ?? 0) <= 0 && (next.prodigyPoints ?? 0) > 0) {
+        queueCoachMark('prodigy');
+      }
       return { nextPlayer: next, leveledUp };
     },
-    [worldFlags]
+    [worldFlags, queueCoachMark]
   );
 
   const addItemToPlayer = useCallback((p: PlayerState, item: Item): PlayerState => {
+    // Phase 6 coach-mark: the first inscription ever gained is a choice
+    // moment (inscribe it, or swap it for a carried rune) — hint once.
+    if (item.category === 'inscription') queueCoachMark('inscription');
     if (item.category === 'consumable') {
       const existingIdx = p.inventory.findIndex((i) => i.consumableKind === item.consumableKind);
       if (existingIdx >= 0) {
@@ -1382,7 +1703,7 @@ export default function App() {
       }
     }
     return { ...p, inventory: [...p.inventory, item] };
-  }, []);
+  }, [queueCoachMark]);
 
   const transitionToZone = useCallback(
     (
@@ -1603,6 +1924,10 @@ export default function App() {
       }
 
       let nextP = { ...p, kills: p.kills + 1, gold: p.gold + enemy.goldReward };
+      // Phase 5: every kill in the game funnels through this handler (the
+      // Grave Husk Deathless cheat returns above, correctly earning no
+      // credit), so lifetime kills are counted here.
+      bumpLifetime({ kind: 'kills', count: 1 });
       const nextZ = {
         ...zone,
         enemies: zone.enemies.filter((e) => e.id !== enemy.id),
@@ -1808,7 +2133,7 @@ export default function App() {
 
       return { nextPlayer: nextP, nextZone: nextZ, nextFlags, victoryTriggered };
     },
-    [addItemToPlayer, evaluateFeatsAndApply, grantXpAndCheckLevel, pushLog, recordRunChronicle, spawnBurst, spawnFloating, worldFlags]
+    [addItemToPlayer, bumpLifetime, evaluateFeatsAndApply, grantXpAndCheckLevel, pushLog, recordRunChronicle, spawnBurst, spawnFloating, worldFlags]
   );
 
   // Full Enemy Turn Simulation
@@ -2288,6 +2613,9 @@ export default function App() {
         const newIntent = chooseEnemyIntent(enemy, curP, curZ);
         if (newIntent) {
           enemy.intent = newIntent;
+          // Phase 6 coach-mark: the first telegraphed Heavy Strike is
+          // the game's hardest early lesson — hint once, as it primes.
+          if (newIntent.type === 'heavy_windup') queueCoachMark('telegraph');
           spawnFloating(
             enemy.x,
             enemy.y,
@@ -5444,6 +5772,155 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
+  // ------------------------------------------------ Phase 6: gamepad
+  // Polling lives here; the mapping + repeat logic is the pure
+  // game/gamepad.ts poller. Actions dispatch through the same handlers
+  // and the same gating as the keyboard path above. A pad press can
+  // never reach the Settings key-capture (it listens for keydown only),
+  // and while Settings is open the pad may only back out of it.
+  const [gamepadConnected, setGamepadConnected] = useState(false);
+
+  useEffect(() => {
+    const poller = new GamepadPoller();
+
+    const dispatchPadAction = (action: GamepadAction) => {
+      const s = stateKeysRef.current;
+      const activeTag = document.activeElement?.tagName;
+      // Never fire while a form field has focus (mirrors keyboard UX).
+      if (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT') return;
+      if (showSettings) {
+        if (action === 'cancel') setShowSettings(false);
+        return;
+      }
+      if (s.showHallOfFame) {
+        if (action === 'cancel' || action === 'interact') setShowHallOfFame(false);
+        return;
+      }
+      if (s.gameState === 'TITLE_MENU') return;
+
+      if (action === 'cancel') {
+        // Mirror the keyboard Escape cascade, step for step.
+        if (s.autoExploring) {
+          setAutoExploring(false);
+          return;
+        }
+        if (s.specialPrompt) {
+          setSpecialPrompt(null);
+          return;
+        }
+        if (s.activePanel !== 'NONE') {
+          setActivePanel('NONE');
+          setActiveDialogue(null);
+          setActiveMerchantId(null);
+          return;
+        }
+        if (s.armedSkill) {
+          setArmedSkill(null);
+          setAimedTarget(null);
+          return;
+        }
+        if (s.armedInscriptionSlot !== null) {
+          setArmedInscriptionSlot(null);
+          setAimedTarget(null);
+          return;
+        }
+        setGameState((cur) => (cur === 'PLAYING' ? 'PAUSED' : cur === 'PAUSED' ? 'PLAYING' : cur));
+        return;
+      }
+
+      if (action === 'pause') {
+        // Start only toggles pause; closing panels/prompts is B's job.
+        if (!s.specialPrompt && s.activePanel === 'NONE' && !s.armedSkill && s.armedInscriptionSlot === null) {
+          setGameState((cur) => (cur === 'PLAYING' ? 'PAUSED' : cur === 'PAUSED' ? 'PLAYING' : cur));
+        }
+        return;
+      }
+
+      if (s.gameState !== 'PLAYING' || s.activePanel !== 'NONE' || s.specialPrompt || s.showHallOfFame) return;
+
+      switch (action) {
+        case 'moveUp':
+          setAutoExploring(false);
+          s.attemptStep(0, -1);
+          break;
+        case 'moveDown':
+          setAutoExploring(false);
+          s.attemptStep(0, 1);
+          break;
+        case 'moveLeft':
+          setAutoExploring(false);
+          s.attemptStep(-1, 0);
+          break;
+        case 'moveRight':
+          setAutoExploring(false);
+          s.attemptStep(1, 0);
+          break;
+        case 'interact': {
+          // Same focus rule as the keyboard: a focused button keeps its
+          // native activation instead of triggering a world interaction.
+          const tag = document.activeElement?.tagName;
+          if (tag === 'BUTTON' || tag === 'A') return;
+          if (s.armedSkill && s.aimedTarget) {
+            s.handleConfirmAimedTarget();
+          } else {
+            s.handleInteractAction(false);
+          }
+          break;
+        }
+        case 'map':
+          setAutoExploring(false);
+          setActivePanel('TRAVEL');
+          break;
+        case 'journal':
+          setAutoExploring(false);
+          setActivePanel('QUESTS');
+          break;
+        case 'cycleTarget':
+          if (s.armedSkill) s.handleCycleTarget();
+          break;
+        case 'explore':
+          s.handleToggleAutoExplore();
+          break;
+      }
+    };
+
+    let raf = 0;
+    const loop = () => {
+      raf = window.requestAnimationFrame(loop);
+      if (!navigator.getGamepads) return;
+      let pad: Gamepad | null = null;
+      for (const candidate of navigator.getGamepads()) {
+        if (candidate && candidate.connected) {
+          pad = candidate;
+          break;
+        }
+      }
+      if (!pad) return;
+      const actions = poller.poll({ buttons: pad.buttons, axes: pad.axes }, performance.now());
+      for (const action of actions) dispatchPadAction(action);
+    };
+    raf = window.requestAnimationFrame(loop);
+
+    const anyPadConnected = () =>
+      Boolean(navigator.getGamepads) &&
+      [...navigator.getGamepads()].some((p) => p && p.connected);
+    const onConnect = () => setGamepadConnected(true);
+    const onDisconnect = () => {
+      poller.reset();
+      setGamepadConnected(anyPadConnected());
+    };
+    window.addEventListener('gamepadconnected', onConnect);
+    window.addEventListener('gamepaddisconnected', onDisconnect);
+    // A pad connected before this effect mounted never re-fires the event.
+    if (anyPadConnected()) setGamepadConnected(true);
+
+    return () => {
+      window.cancelAnimationFrame(raf);
+      window.removeEventListener('gamepadconnected', onConnect);
+      window.removeEventListener('gamepaddisconnected', onDisconnect);
+    };
+  }, [showSettings]);
+
   // Inventory & Progression Handlers
   const handleSpendAttribute = (attr: AttributeKey) => {
     if (player.attributePoints <= 0) return;
@@ -5814,11 +6291,13 @@ export default function App() {
           onOpenSettings={() => setShowSettings(true)}
           onOpenCredits={() => setShowCredits(true)}
           blockKeys={showHallOfFame}
+          gamepadConnected={gamepadConnected}
         />
         {showHallOfFame && (
           <HallOfFameModal
             entries={mergedChronicles}
             isSignedIn={Boolean(authUser)}
+            lifetime={lifetime}
             onClose={() => setShowHallOfFame(false)}
           />
         )}
@@ -5894,6 +6373,7 @@ export default function App() {
           hitFlashes={hitFlashes}
           shakeUntil={shakeUntil}
           tileSize={tileSize}
+          patternSignals={settings.patternSignals}
           onTileSizeChange={handleTileSizeChange}
           onTileClick={handleTileClick}
           onStep={(dx, dy) => {
@@ -5953,6 +6433,31 @@ export default function App() {
                 </p>
                 <p className="text-[11px] text-amber-300/90 mt-1 leading-snug">
                   {zoneBanner.tactical}
+                </p>
+              </div>
+              <X className="w-3.5 h-3.5 text-slate-500 shrink-0 mt-0.5" />
+            </div>
+          </button>
+        )}
+
+        {/* Phase 6: one-time coach-mark toast (same banner idiom as the
+            zone briefing; stacks below it when both are up) */}
+        {coachToast && (
+          <button
+            type="button"
+            onClick={() => setCoachToast(null)}
+            aria-label="Dismiss hint"
+            className={`absolute ${
+              zoneBanner ? 'top-36 md:top-32' : 'top-12 md:top-3'
+            } left-1/2 -translate-x-1/2 z-30 w-[min(92vw,440px)] text-left px-3.5 py-2.5 rounded-lg border border-sky-400/40 bg-[#0D111A]/92 backdrop-blur-sm shadow-2xl cursor-pointer transition-opacity hover:border-sky-300/60`}
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="font-display text-sm sm:text-base font-bold text-sky-200 tracking-wide">
+                  {coachToast.title}
+                </div>
+                <p className="text-[11px] sm:text-xs text-slate-300 mt-0.5 leading-snug">
+                  {coachToast.body}
                 </p>
               </div>
               <X className="w-3.5 h-3.5 text-slate-500 shrink-0 mt-0.5" />
@@ -6207,6 +6712,8 @@ export default function App() {
           derived={derived}
           worldFlags={worldFlags}
           playTimeMs={Date.now() - runStartedAtRef.current}
+          ngPlusCycle={ngPlusCycle}
+          onAscend={handleAscendNgPlus}
           onContinueAbyss={() => {
             pushLog(
               'The cinder-throne is empty. Below Floor 5, the Abyssal Stair descends into the Endless Abyss.',
@@ -6232,6 +6739,8 @@ export default function App() {
           player={player}
           derived={derived}
           difficultyLabel={DIFFICULTY_INFO[difficulty].label}
+          ngPlusCycle={ngPlusCycle}
+          hardcore={hardcore}
           authUser={authUser}
           cloudBusy={authBusy || cloudSaving}
           onSignIn={handleSignInGoogle}
@@ -6249,6 +6758,10 @@ export default function App() {
               version: SAVE_VERSION,
               difficulty,
               completedAtMs: completedAtMs ?? undefined,
+              ngPlusCycle,
+              hardcore,
+              deadAtMs: deathStampRef.current?.deadAtMs,
+              deathNote: deathStampRef.current?.deathNote,
             };
             const localOk = saveBundleToStorage(bundle, derived.buildTitle, activeSlot, true);
             const slotLabel = activeSlot.replace('_', ' ').toUpperCase();
@@ -6270,6 +6783,10 @@ export default function App() {
                       gold: player.gold,
                       updatedAtMs: Date.now(),
                       completedAtMs: completedAtMs ?? undefined,
+                      ngPlusCycle,
+                      hardcore,
+                      deadAtMs: deathStampRef.current?.deadAtMs,
+                      deathNote: deathStampRef.current?.deathNote,
                     },
                     payload: bundle,
                   },
@@ -6324,6 +6841,7 @@ export default function App() {
         <HallOfFameModal
           entries={mergedChronicles}
           isSignedIn={Boolean(authUser)}
+          lifetime={lifetime}
           onClose={() => setShowHallOfFame(false)}
         />
       )}

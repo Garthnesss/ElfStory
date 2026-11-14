@@ -7,6 +7,8 @@ import {
   KEY_ACTIONS,
   KEY_ACTION_LABELS,
   KeyAction,
+  TEXT_SIZE_LABELS,
+  TEXT_SIZE_OPTIONS,
   TILE_SIZE_STEPS,
   formatKeyLabel,
   rebindKeymap,
@@ -182,6 +184,36 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             value={settings.screenShake}
             onChange={(v) => onSettingsChange({ screenShake: v })}
           />
+          <ToggleRow
+            label="Pattern Signals"
+            hint="Draw a ! marker on telegraphed danger tiles, so incoming attacks are never signalled by colour alone."
+            value={settings.patternSignals}
+            onChange={(v) => onSettingsChange({ patternSignals: v })}
+          />
+        </section>
+
+        <section className="space-y-2">
+          <div className="text-xs font-medium text-slate-300">Text Size</div>
+          <div className="grid grid-cols-3 gap-2">
+            {TEXT_SIZE_OPTIONS.map((size) => (
+              <button
+                key={size}
+                type="button"
+                onClick={() => onSettingsChange({ textSize: size })}
+                aria-pressed={settings.textSize === size}
+                className={`min-h-[44px] py-2 rounded border text-xs font-medium cursor-pointer ${
+                  settings.textSize === size
+                    ? 'border-amber-400/60 bg-amber-500/20 text-amber-200'
+                    : 'border-white/12 bg-[#141923] text-slate-300 hover:border-amber-400/40'
+                }`}
+              >
+                {TEXT_SIZE_LABELS[size]}
+              </button>
+            ))}
+          </div>
+          <p className="text-[11px] text-slate-500 leading-snug">
+            Scales the interface text. The map itself keeps its own tile size, below.
+          </p>
         </section>
 
         <section className="space-y-2">

@@ -12,9 +12,24 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <meta name="theme-color" content="#0B0D12" />
   </head>
   <body class="bg-[#0B0D12] text-[#ECE4D4] antialiased selection:bg-amber-500/30 selection:text-amber-100 overflow-hidden">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <script>
+      // Phase 6 PWA: register the app-shell service worker. Guarded to
+      // http(s) so a single-file standalone build opened via file://
+      // never registers (or throws) — registration lives only here.
+      if (
+        'serviceWorker' in navigator &&
+        (location.protocol === 'https:' || location.protocol === 'http:')
+      ) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('sw.js').catch(() => {});
+        });
+      }
+    </script>
   </body>
 </html>

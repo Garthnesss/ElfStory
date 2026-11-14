@@ -82,6 +82,10 @@ test('settings: save/load roundtrip persists and rewrites the legacy key', () =>
     // Phase 4: GameSettings gained the keymap; the roundtrip fixture
     // carries the factory bindings.
     keymap: DEFAULT_KEYMAP,
+    // Phase 6: GameSettings gained the accessibility fields; the fixture
+    // carries non-default values so the roundtrip proves they persist.
+    textSize: 'large' as const,
+    patternSignals: false,
   };
   saveSettings(next, storage);
   assert.equal(storage._map.get('elfstory-muted'), '1');

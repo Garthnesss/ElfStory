@@ -10,6 +10,10 @@ interface EndPauseModalProps {
   /** Phase 4: current run difficulty label (e.g. 'Standard'), shown in the
    *  stats grid so the tier is visible without opening Settings. */
   difficultyLabel?: string;
+  /** Phase 5: current NG+ ascension cycle (shown when > 0). */
+  ngPlusCycle?: number;
+  /** Phase 5: whether this run is hardcore (permadeath). */
+  hardcore?: boolean;
   authUser: User | null;
   cloudBusy: boolean;
   onSignIn: () => void;
@@ -34,6 +38,8 @@ export const EndPauseModal: React.FC<EndPauseModalProps> = ({
   player,
   derived,
   difficultyLabel,
+  ngPlusCycle = 0,
+  hardcore = false,
   authUser,
   cloudBusy,
   onSignIn,
@@ -55,7 +61,9 @@ export const EndPauseModal: React.FC<EndPauseModalProps> = ({
     mode === 'VICTORY'
       ? 'Malakor’s cinder crown has shattered. You may descend Floor 5’s Abyssal Stair into the Endless Abyss—or start a fresh build.'
       : mode === 'GAME_OVER'
-        ? 'Your lantern fades among the cold stones, though every delve teaches a sharper build.'
+        ? hardcore
+          ? 'Your lantern fades among the cold stones — and in Hardcore, it does not rekindle. This run is etched into the Chronicle as fallen, forever.'
+          : 'Your lantern fades among the cold stones, though every delve teaches a sharper build.'
         : authUser
           ? `Saving to ${SLOT_LABEL[activeSlot]} in Cloud (${authUser.displayName ?? 'Google'}) & browser.`
           : `Saving locally to ${SLOT_LABEL[activeSlot]}. Sign in with Google to sync runs to the cloud.`;
@@ -114,6 +122,18 @@ export const EndPauseModal: React.FC<EndPauseModalProps> = ({
             <div>
               <div className="text-slate-400">Difficulty</div>
               <div className="text-[#ECE4D4] font-semibold mt-0.5">{difficultyLabel}</div>
+            </div>
+          )}
+          {ngPlusCycle > 0 && (
+            <div>
+              <div className="text-slate-400">Ascension Cycle</div>
+              <div className="text-[#ECE4D4] font-semibold mt-0.5">Cycle {ngPlusCycle}</div>
+            </div>
+          )}
+          {hardcore && (
+            <div>
+              <div className="text-slate-400">Mode</div>
+              <div className="text-rose-300 font-semibold mt-0.5">Hardcore — death is final</div>
             </div>
           )}
         </div>

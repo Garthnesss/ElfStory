@@ -19,6 +19,15 @@ export interface LocalSlotSummary {
   completedAtMs?: number;
   /** Phase 4: the run's difficulty tier. */
   difficulty?: DifficultyTier;
+  /** Phase 5: the run's NG+ ascension cycle (absent => 0). */
+  ngPlusCycle?: number;
+  /** Phase 5: whether the run is hardcore (permadeath). */
+  hardcore?: boolean;
+  /** Phase 5: epoch ms of a hardcore run's final death — set means the
+   *  slot is fallen: rendered as fallen, Load disabled, Delete works. */
+  deadAtMs?: number;
+  /** Phase 5: short death note (floor / zone) for the fallen line. */
+  deathNote?: string;
 }
 
 interface TitleScreenProps {
@@ -39,7 +48,8 @@ interface TitleScreenProps {
   onStartNew: (
     starterClass: PlayerState['starterClass'],
     slotId: SaveSlotId,
-    difficulty: DifficultyTier
+    difficulty: DifficultyTier,
+    hardcore: boolean
   ) => void;
   onContinueLocal: (slotId: SaveSlotId) => void;
   onContinueCloud: (slotId: SaveSlotId) => void;
@@ -48,6 +58,8 @@ interface TitleScreenProps {
   onOpenSettings: () => void;
   onOpenCredits: () => void;
   blockKeys?: boolean;
+  /** Phase 6: a gamepad is connected — the control hint line says so. */
+  gamepadConnected?: boolean;
 }
 
 const STARTER_CLASSES: Array<{
@@ -118,13 +130,18 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
   onOpenSettings,
   onOpenCredits,
   blockKeys = false,
+  gamepadConnected = false,
 }) => {
   const [selectedClass, setSelectedClass] = useState<PlayerState['starterClass']>('Vanguard');
   const [selectedDifficulty, setSelectedDifficulty] = useState<DifficultyTier>('standard');
+  const [hardcore, setHardcore] = useState(false);
   const [imgError, setImgError] = useState(false);
 
   const selectedCloud = cloudSlots[activeSlot];
   const selectedLocal = localSlots[activeSlot];
+  // Phase 5: a fallen hardcore run can never be loaded again.
+  const selectedCloudFallen = selectedCloud?.deadAtMs != null;
+  const selectedLocalFallen = selectedLocal?.deadAtMs != null;
 
   // NOTE: No Enter/Space keyboard shortcut here on purpose. It previously
   // auto-started a New Adventure over whatever save occupied the selected
@@ -325,13 +342,43 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
               </div>
             </div>
 
+            {/* Hardcore Toggle (Phase 5) — set at run creation only */}
+            <div className="space-y-1.5">
+              <button
+                type="button"
+                onClick={() => setHardcore((v) => !v)}
+                aria-pressed={hardcore}
+                className={`min-h-[44px] w-full max-w-lg px-3.5 py-2.5 rounded border text-left transition-colors cursor-pointer ${
+                  hardcore
+                    ? 'border-rose-400/70 bg-rose-500/12 text-[#FDF6E3]'
+                    : 'border-white/10 bg-[#11151E]/80 text-slate-300 hover:border-white/25'
+                }`}
+              >
+                <span className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-semibold">Hardcore — death is final</span>
+                  <span
+                    className={`text-[11px] font-mono-glyph font-bold ${
+                      hardcore ? 'text-rose-300' : 'text-slate-500'
+                    }`}
+                  >
+                    {hardcore ? 'ON' : 'OFF'}
+                  </span>
+                </span>
+                <span className="block text-[11px] text-slate-400 mt-0.5 leading-snug">
+                  Permadeath: if Garth falls, the run ends forever — the slot is marked fallen
+                  and can never be loaded again. Chosen now, at creation; it cannot be changed
+                  mid-run.
+                </span>
+              </button>
+            </div>
+
             {authError && <div className="text-xs text-rose-300">{authError}</div>}
 
             {/* Primary CTAs */}
             <div className="flex flex-wrap items-center gap-3 pt-1">
               <button
                 type="button"
-                onClick={() => onStartNew(selectedClass, activeSlot, selectedDifficulty)}
+                onClick={() => onStartNew(selectedClass, activeSlot, selectedDifficulty, hardcore)}
                 className="min-h-[44px] px-6 py-2.5 rounded bg-amber-500 hover:bg-amber-400 text-[#0B0D12] font-semibold text-sm transition-colors cursor-pointer whitespace-nowrap shrink-0"
               >
                 {selectedLocal || selectedCloud
@@ -339,7 +386,7 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
                   : `Start Adventure (${SLOT_LABELS[activeSlot]})`}
               </button>
 
-              {selectedCloud && (
+              {selectedCloud && !selectedCloudFallen && (
                 <button
                   type="button"
                   onClick={() => onContinueCloud(activeSlot)}
@@ -349,7 +396,7 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
                 </button>
               )}
 
-              {selectedLocal && (
+              {selectedLocal && !selectedLocalFallen && (
                 <button
                   type="button"
                   onClick={() => onContinueLocal(activeSlot)}
@@ -377,6 +424,11 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
                 const cloud = cloudSlots[slotId];
                 const local = localSlots[slotId];
                 const primary = cloud ?? local;
+                // Phase 5: fallen hardcore runs render as fallen and lose
+                // their Load buttons (Delete still works).
+                const cloudFallen = cloud?.deadAtMs != null;
+                const localFallen = local?.deadAtMs != null;
+                const primaryFallen = primary?.deadAtMs != null;
                 const isSelected = activeSlot === slotId;
                 // Phase 4: a local save that exists but cannot be loaded
                 // (corrupt / newer format) shows its issue in place of a
@@ -399,9 +451,15 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
                           {SLOT_LABELS[slotId]}
                         </span>
                         {primary ? (
-                          <span className="text-sm font-semibold text-[#ECE4D4] truncate">
-                            {primary.buildTitle}
-                          </span>
+                          primaryFallen ? (
+                            <span className="text-sm font-semibold text-rose-300 truncate">
+                              ☠ Fallen
+                            </span>
+                          ) : (
+                            <span className="text-sm font-semibold text-[#ECE4D4] truncate">
+                              {primary.buildTitle}
+                            </span>
+                          )
                         ) : issue ? (
                           <span className="text-xs font-semibold text-rose-300">
                             {issue.kind === 'corrupt' ? 'Save Corrupted' : 'Newer Save Format'}
@@ -417,7 +475,7 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
                       </div>
 
                       <div className="flex items-center gap-1.5 shrink-0">
-                        {cloud && (
+                        {cloud && !cloudFallen && (
                           <button
                             type="button"
                             onClick={(e) => {
@@ -429,7 +487,7 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
                             Cloud
                           </button>
                         )}
-                        {local && (
+                        {local && !localFallen && (
                           <button
                             type="button"
                             onClick={(e) => {
@@ -469,12 +527,21 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
                       </div>
                     </div>
 
-                    {primary && (
+                    {primary && primaryFallen && (
+                      <div className="text-[11px] font-mono-glyph text-rose-200/85 mt-1 truncate tabular-nums">
+                        ☠ Fallen — Cycle {primary.ngPlusCycle ?? 0}
+                        {primary.deathNote ? ` · ${primary.deathNote}` : ''} · Lv {primary.level}{' '}
+                        {primary.starterClass} · Hardcore
+                      </div>
+                    )}
+                    {primary && !primaryFallen && (
                       <div className="text-[11px] font-mono-glyph text-slate-400 mt-1 truncate tabular-nums">
                         Lv {primary.level} · {primary.starterClass} · {primary.zoneName} · {primary.kills} Slain
                         {local && primary === local && local.difficulty
                           ? ` · ${DIFFICULTY_INFO[local.difficulty].label}`
                           : ''}
+                        {(primary.ngPlusCycle ?? 0) > 0 ? ` · Cycle ${primary.ngPlusCycle}` : ''}
+                        {primary.hardcore ? ' · Hardcore' : ''}
                       </div>
                     )}
                     {issue && !primary && (
@@ -492,6 +559,7 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
         {/* Single Flat Control Hint Line */}
         <div className="text-xs font-mono-glyph text-slate-400">
           Desktop: WASD / Arrows · Click Tile · 1–5 Skills · 6–8 Runes · Z Explore · ? Guide · Phone: Swipe / D-Pad · Look · Map
+          {gamepadConnected ? ' · 🎮 Gamepad' : ''}
         </div>
       </div>
     </div>
