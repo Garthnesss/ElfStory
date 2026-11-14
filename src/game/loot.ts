@@ -265,7 +265,7 @@ export function createConsumable(kind: ConsumableKind, quantity = 1): Item {
         stats: {},
         value: 18,
         quantity,
-        description: 'Restores 24+ HP immediately without ending your combat poise.',
+        description: 'Restores at least 35% of Max HP immediately without ending your combat poise.',
       };
     case 'mana_potion':
       return {
@@ -280,7 +280,7 @@ export function createConsumable(kind: ConsumableKind, quantity = 1): Item {
         stats: {},
         value: 22,
         quantity,
-        description: 'Restores 16 Mana and clears minor fatigue.',
+        description: 'Restores at least 40% of Max Mana and clears minor fatigue.',
       };
     case 'scroll_blink':
       return {

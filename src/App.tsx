@@ -208,15 +208,22 @@ function readLocalChronicles(): ChronicleEntry[] {
   }
 }
 
-function makeCompanion(kind: CompanionKind, x: number, y: number): CompanionState {
+// P1: companion durability scales with player level. Flat 24/20 HP meant the
+// companion died permanently from about F5 no matter how strong the player got.
+function companionMaxHpFor(kind: CompanionKind, level: number): number {
+  return kind === 'starlight_owl' ? 20 + (level - 1) * 5 : 24 + (level - 1) * 7;
+}
+
+function makeCompanion(kind: CompanionKind, x: number, y: number, level = 1): CompanionState {
+  const maxHp = companionMaxHpFor(kind, level);
   if (kind === 'starlight_owl') {
     return {
       kind,
       name: 'Starlight Owl',
       x,
       y,
-      hp: 20,
-      maxHp: 20,
+      hp: maxHp,
+      maxHp,
       stance: 'aggressive',
       respawnCooldown: 0,
     };
@@ -226,8 +233,8 @@ function makeCompanion(kind: CompanionKind, x: number, y: number): CompanionStat
     name: 'Silverwind Lynx',
     x,
     y,
-    hp: 24,
-    maxHp: 24,
+    hp: maxHp,
+    maxHp,
     stance: 'aggressive',
     respawnCooldown: 0,
   };
@@ -922,7 +929,9 @@ export default function App() {
       prodigyCooldowns: data.player.prodigyCooldowns ?? {},
       hasteSteps: data.player.hasteSteps ?? 0,
       bonusHp: data.player.bonusHp ?? 0,
-      companion: data.player.companion ?? makeCompanion(defaultCompanionKind, data.player.x, data.player.y),
+      companion:
+        data.player.companion ??
+        makeCompanion(defaultCompanionKind, data.player.x, data.player.y, data.player.level),
     };
     const normalizedFlags: WorldFlags = {
       ...createInitialFlags(),
@@ -1059,7 +1068,7 @@ export default function App() {
       while (next.xp >= next.xpToNext) {
         next.xp -= next.xpToNext;
         next.level += 1;
-        next.xpToNext = Math.round(next.xpToNext * 1.42);
+        next.xpToNext = Math.round(next.xpToNext * 1.3);
         next.attributePoints += 2;
         next.skillPoints += 1;
         if (next.level === 6 || next.level === 10) {
@@ -1070,6 +1079,15 @@ export default function App() {
         next.maxMana = d.maxMana;
         next.hp = d.maxHp;
         next.mana = d.maxMana;
+        if (next.companion) {
+          const compMax = companionMaxHpFor(next.companion.kind, next.level);
+          const compDelta = compMax - next.companion.maxHp;
+          next.companion = {
+            ...next.companion,
+            maxHp: compMax,
+            hp: next.companion.hp > 0 ? next.companion.hp + compDelta : 0,
+          };
+        }
         leveledUp = true;
       }
       return { nextPlayer: next, leveledUp };
@@ -1159,7 +1177,7 @@ export default function App() {
       if (targetZoneId === 'dungeon_5' && activeFlags.malakorWeakened) {
         target.enemies = target.enemies.map((e) =>
           e.archetype === 'boss_malakor' && e.hp === e.maxHp
-            ? { ...e, hp: Math.max(120, e.hp - 45), maxHp: Math.max(120, e.maxHp - 45), def: Math.max(4, e.def - 3) }
+            ? { ...e, hp: Math.max(400, e.hp - 180), maxHp: Math.max(400, e.maxHp - 180), def: Math.max(4, e.def - 3) }
             : e
         );
       }
@@ -1660,8 +1678,8 @@ export default function App() {
             if (adjTarget) {
               const baseCompDmg =
                 comp.kind === 'silverwind_lynx'
-                  ? 5 + Math.floor(curP.level * 1.4) + Math.floor(curP.attributes.agility * 0.6)
-                  : 4 + Math.floor(curP.level * 1.1) + Math.floor(curP.attributes.arcana * 0.7);
+                  ? 6 + Math.floor(curP.level * 2.4) + Math.floor(curP.attributes.agility * 0.6)
+                  : 5 + Math.floor(curP.level * 2.0) + Math.floor(curP.attributes.arcana * 0.7);
               const isCompCrit = comp.kind === 'silverwind_lynx' && Math.random() < 0.2;
               const bestiaryMult = computeBestiaryPerks(activeFlags).damageMultiplierVs(adjTarget.archetype);
               const finalCompDmg = Math.max(
@@ -1982,7 +2000,10 @@ export default function App() {
           const comp = curP.companion;
           const chilled = enemy.statuses.some((s) => s.kind === 'chilled');
           const rawAtk = chilled ? Math.round(enemy.atk * 0.65) : enemy.atk;
-          const compDmg = Math.max(1, rawAtk - (comp.kind === 'silverwind_lynx' ? 2 : 1));
+          const compDmg = Math.max(
+            1,
+            rawAtk - ((comp.kind === 'silverwind_lynx' ? 2 : 1) + Math.floor(curP.level / 3))
+          );
           comp.hp = Math.max(0, comp.hp - compDmg);
           spawnFloating(comp.x, comp.y, `-${compDmg}`, '#F87171');
           pushLog(`${enemy.name} strikes ${comp.name} for ${compDmg} dmg.`, 'danger', curP.turnsElapsed);
@@ -4270,13 +4291,15 @@ export default function App() {
       const nextZ = { ...currentZone, enemies: currentZone.enemies.map((e) => ({ ...e })) };
 
       if (item.consumableKind === 'heal_potion') {
-        const amt = (worldFlags.miraPotionTier > 1 ? 38 : 24) + apothecaryBonusHp;
+        const amt =
+          Math.max(worldFlags.miraPotionTier > 1 ? 38 : 24, Math.round(d.maxHp * 0.35)) +
+          apothecaryBonusHp;
         nextP.hp = Math.min(d.maxHp, nextP.hp + amt);
         soundEngine.playHeal();
         spawnFloating(nextP.x, nextP.y, `+${amt} HP`, '#4EA885');
         pushLog(`Drank Crimson Draught (+${amt} HP).`, 'loot');
       } else if (item.consumableKind === 'mana_potion') {
-        const mpAmt = 16 + apothecaryBonusMp;
+        const mpAmt = Math.max(16, Math.round(d.maxMana * 0.4)) + apothecaryBonusMp;
         nextP.mana = Math.min(d.maxMana, nextP.mana + mpAmt);
         soundEngine.playSpell();
         spawnFloating(nextP.x, nextP.y, `+${mpAmt} MP`, '#60A5FA');
@@ -4444,7 +4467,8 @@ export default function App() {
           const fresh = makeCompanion(
             nextKind,
             nextP.companion?.x ?? Math.max(1, nextP.x - 1),
-            nextP.companion?.y ?? nextP.y
+            nextP.companion?.y ?? nextP.y,
+            nextP.level
           );
           if (nextP.companion?.stance) {
             fresh.stance = nextP.companion.stance;

@@ -12,7 +12,7 @@ Nov 14, 2026 adversarial audit and Garth's picks from its decision pack.
 - Regression tests for the 3 exploits in `tests/engine.test.ts` style.
 - Gate: `npm test` green including new regression tests, `tsc --noEmit` clean, `npm run build` clean, and each exploit's repro from the audit no longer works.
 
-## Phase 1 — "Difficulty that scales" (P1 — queued, needs Garth's go)
+## Phase 1 — "Difficulty that scales" (P1 — DONE Nov 14, 2026; sim-verified, see STATUS.md and `tools/difficulty_sim.py`)
 - Rebalance early game: enemy HP bases up ~2–3× and/or player ATK growth down, so floors 1–7 are fights, not one-shots.
 - Scale story bosses to expected arrival level (Malakor especially; current: dies in 3–4 basic attacks); fix the inversion where side boss Kaelthar (359 HP / 57 ATK) massively out-stats the final boss.
 - Scale Crimson Draught healing and companion HP/damage with level/depth (companion currently flat 24 HP, perma-dead from ~floor 5).

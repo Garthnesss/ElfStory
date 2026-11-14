@@ -16,7 +16,13 @@ import {
 import { NPCS } from '../src/game/npcs';
 import { computeDerivedStats, computeRespecPoints, getStarterPreset } from '../src/game/skills';
 import { Enemy, PlayerState, Tile, WorldFlags, ZoneId, ZoneMap } from '../src/game/types';
-import { createInitialZones, generateDungeonFloor, generateZoneById } from '../src/game/world';
+import {
+  createEnemy,
+  createInitialZones,
+  generateDungeonFloor,
+  generateSideDungeonFloor,
+  generateZoneById,
+} from '../src/game/world';
 
 function makeTestPlayer(): PlayerState {
   const preset = getStarterPreset('Vanguard');
@@ -512,4 +518,34 @@ test('bestiary glyphs match enemy archetypes in world generators', () => {
   if (wisp) {
     assert.equal(wisp.glyph, BESTIARY_DEFS.cinder_wisp.glyph);
   }
+});
+
+test('P1 regression: floor-1 enemies survive a starter Vanguard opening hit', () => {
+  const player = makeTestPlayer();
+  const stats = computeDerivedStats(player);
+  for (const arch of ['plague_rat', 'goblin_skirmisher', 'crypt_skeleton'] as const) {
+    const enemy = createEnemy(arch, 0, 0, 1);
+    // Non-crit basic hit must not one-shot any F1 archetype anymore.
+    const expected = Math.max(2, Math.round(stats.atk - enemy.def * 0.6));
+    assert.ok(enemy.hp > expected, `${arch} HP ${enemy.hp} should exceed one basic hit (${expected})`);
+  }
+});
+
+test('P1 regression: final boss out-stats every side boss (no Kaelthar inversion)', () => {
+  const malakor = createEnemy('boss_malakor', 0, 0, 5);
+  assert.equal(malakor.hp, 1000);
+  const frost = generateSideDungeonFloor('frost', 3);
+  const kaelthar = frost.enemies.find((e) => e.id === 'boss_kaelthar');
+  assert.ok(kaelthar, 'Kaelthar should guard frost_3');
+  assert.ok(kaelthar.hp < malakor.hp, `Kaelthar HP ${kaelthar.hp} must stay below Malakor ${malakor.hp}`);
+  assert.ok(kaelthar.atk <= malakor.atk, `Kaelthar ATK ${kaelthar.atk} must not exceed Malakor ${malakor.atk}`);
+  const barrow = generateSideDungeonFloor('barrow', 2);
+  const morvath = barrow.enemies.find((e) => e.id === 'boss_morvath');
+  assert.ok(morvath && morvath.hp < 420, 'Morvath should sit below Vaelen-tier HP');
+});
+
+test('P1 regression: story bosses are scaled to arrival level, not 3-hit kills', () => {
+  assert.equal(createEnemy('boss_bone_cantor', 0, 0, 2).hp, 420);
+  assert.equal(createEnemy('boss_ashen_inquisitor', 0, 0, 4).hp, 690);
+  assert.equal(createEnemy('boss_malakor', 0, 0, 5).atk, 36);
 });

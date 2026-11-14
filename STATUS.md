@@ -1,7 +1,7 @@
 # ElfStory — Status
 
 **Last updated:** 2026-11-14
-**Phase:** Phase 0 — "Ship-safe" (P0 fix pass complete, verified; awaiting push to the new repo)
+**Phase:** Phase 1 — "Difficulty that scales" (P1 rebalance complete, verified by simulation + tests; pushed to GitHub)
 
 ## Where things stand
 - **Base game — RUNS** (verified Nov 14, 2026): clean install (`--legacy-peer-deps`, Node 24), `npm test` 11/11 pass, `tsc --noEmit` clean, `vite build` clean (single 1.22 MB JS chunk). HANDOFF.md claims audited against code and found unusually honest — all claimed systems present.
@@ -14,8 +14,14 @@
   - Autosave: local save every 25 turns while PLAYING + on tab hide/close (local-only); mute persisted (`elfstory-muted`), zoom persisted (`elfstory-tile-size`).
   - ErrorBoundary in `src/main.tsx`: a render crash now shows a recoverable "lantern guttered out" screen with reload, instead of a white page.
   - Not play-tested in a live browser by Muse (no browser on the VM reaches the local build) — the verification is test/typecheck/build + code-level repro closure. Garth's first run in the new repo is the by-hand check.
-- **Repo — CREATED BY GARTH** (Nov 14, 2026): **`elfstory`** (his words; Muse's GitHub API route returned 401 Bad credentials the same day, so Muse cannot see or push to it — the fixed tree ships as a zip for Garth to drop in). The four canonical docs + README are in the project root so they land with the first real commit.
-- **Difficulty rebalance (P1) — NOT STARTED**: queued behind P0 per Garth's pick.
+- **Repo — LIVE** (Nov 14, 2026): **Garthnesss/ElfStory** (public). P0 tree pushed by Muse via the official GitHub connector (commit `42e0b5f`); the 14 JPGs could not ride the text-only snapshot push and were committed on the Mac clone (`e46a711`) — one `git push` from Garth's GUI Terminal (or `~/sync-all.sh`) lands them. (The legacy gh-api route 401s; the official connector is the working route.)
+- **P1 difficulty rebalance — DONE, VERIFIED** (Nov 14, 2026; `npm test` **17/17**, `tsc` clean, `vite build` clean; tuning verified with `tools/difficulty_sim.py`, which parses its constants from the game source so it cannot drift):
+  - Normal enemies: base HP roughly ×2.3 and early ATK up — F1 trash now takes 2–3 hits instead of being one-shot, and F1–F2 hits register past starter DEF.
+  - Story bosses scaled to expected arrival level: Vaelen 95→420 HP, Serath 145→690, Malakor 230→1000 HP / 24→36 ATK (TTK ≈ 8 / 8 / 10 basic attacks). Bell-weakened Malakor now loses 180 HP instead of 45.
+  - Kaelthar inversion fixed: side bosses get an explicit tuning table in `generateSideDungeonFloor` (Morvath/Vexis 376 HP, Kaelthar 513 HP / 34 ATK — all below Malakor); F5 vault guards no longer spawn a depth deeper at randboss rank.
+  - XP curve ×1.42 → ×1.30 per level so levels keep arriving in the Abyss; simulated full-clear death window moves from ~F25–40 to roughly **F33–42**, with pressure building gradually (hits-to-die 8 at F15 → ~3 at F40). Estimate from the sim, not a playthrough guarantee.
+  - Potions scale: Crimson Draught heals max(flat, 35% of Max HP), Aether Vial restores max(flat, 40% of Max Mana).
+  - Companions scale: max HP grows per level (lynx 24 + 7/level, owl 20 + 5/level, applied at bond, on level-up, and on companion swap), damage scaling raised, damage-intake reduction grows every 3 levels.
 - **Music / settings / tutorial / ending — NOT STARTED**: Phase 2.
 
 ## Decisions made
@@ -24,8 +30,8 @@
 - Four canonical docs live in the project root (standing rule, Oct 28, 2026; applied to ElfStory Nov 14, 2026).
 
 ## Open decisions (need Garth's call)
-1. **P1 difficulty pass go-ahead** — after P0 lands, start Phase 1 rebalance, or play the P0 build first?
-2. **Repo visibility** — repo `elfstory` created by Garth Nov 14, 2026; public/private was his call in that flow (not visible to Muse via the API route).
+1. **Push the JPG commit** — Mac clone has `e46a711` (the 14 portraits/backdrop) committed and ready; needs one `git push` from the GUI Terminal (SSH sessions can't read the keychain) or a `~/sync-all.sh` run.
+2. **By-hand play check** — P0 + P1 are test/sim/build-verified, not yet hand-played. First run: does F1 feel fair at 2–3 hits per enemy, and do the bosses feel like bosses?
 3. **Audit report in-repo?** — copy `elfstory-adversarial-audit.md` into the repo (e.g. `docs/`) or keep it in Garth's files only.
 
 ## Next actions

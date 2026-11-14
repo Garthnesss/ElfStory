@@ -243,9 +243,9 @@ export function createEnemy(archetype: EnemyArchetype, x: number, y: number, dep
         color: '#A8A29E',
         x,
         y,
-        hp: Math.round(14 * scale),
-        maxHp: Math.round(14 * scale),
-        atk: Math.round(5 * scale),
+        hp: Math.round(32 * scale),
+        maxHp: Math.round(32 * scale),
+        atk: Math.round(7 * scale),
         def: 0,
         xpReward: Math.round(12 * scale),
         goldReward: Math.round(5 * scale),
@@ -262,9 +262,9 @@ export function createEnemy(archetype: EnemyArchetype, x: number, y: number, dep
         color: '#4EA885',
         x,
         y,
-        hp: Math.round(20 * scale),
-        maxHp: Math.round(20 * scale),
-        atk: Math.round(7 * scale),
+        hp: Math.round(46 * scale),
+        maxHp: Math.round(46 * scale),
+        atk: Math.round(9 * scale),
         def: 1 + Math.floor(depth / 2),
         xpReward: Math.round(18 * scale),
         goldReward: Math.round(9 * scale),
@@ -281,9 +281,9 @@ export function createEnemy(archetype: EnemyArchetype, x: number, y: number, dep
         color: '#E5DEC9',
         x,
         y,
-        hp: Math.round(25 * scale),
-        maxHp: Math.round(25 * scale),
-        atk: Math.round(8 * scale),
+        hp: Math.round(58 * scale),
+        maxHp: Math.round(58 * scale),
+        atk: Math.round(11 * scale),
         def: 2 + Math.floor(depth / 2),
         xpReward: Math.round(22 * scale),
         goldReward: Math.round(11 * scale),
@@ -300,9 +300,9 @@ export function createEnemy(archetype: EnemyArchetype, x: number, y: number, dep
         color: '#A78BFA',
         x,
         y,
-        hp: Math.round(22 * scale),
-        maxHp: Math.round(22 * scale),
-        atk: Math.round(9 * scale),
+        hp: Math.round(50 * scale),
+        maxHp: Math.round(50 * scale),
+        atk: Math.round(10 * scale),
         def: 1 + Math.floor(depth / 2),
         xpReward: Math.round(28 * scale),
         goldReward: Math.round(14 * scale),
@@ -319,8 +319,8 @@ export function createEnemy(archetype: EnemyArchetype, x: number, y: number, dep
         color: '#FB923C',
         x,
         y,
-        hp: Math.round(28 * scale),
-        maxHp: Math.round(28 * scale),
+        hp: Math.round(64 * scale),
+        maxHp: Math.round(64 * scale),
         atk: Math.round(10 * scale),
         def: 2 + Math.floor(depth / 2),
         xpReward: Math.round(32 * scale),
@@ -338,8 +338,8 @@ export function createEnemy(archetype: EnemyArchetype, x: number, y: number, dep
         color: '#C084FC',
         x,
         y,
-        hp: Math.round(30 * scale),
-        maxHp: Math.round(30 * scale),
+        hp: Math.round(69 * scale),
+        maxHp: Math.round(69 * scale),
         atk: Math.round(12 * scale),
         def: 2 + Math.floor(depth / 2),
         xpReward: Math.round(38 * scale),
@@ -358,8 +358,8 @@ export function createEnemy(archetype: EnemyArchetype, x: number, y: number, dep
         color: '#94A3B8',
         x,
         y,
-        hp: Math.round(45 * scale),
-        maxHp: Math.round(45 * scale),
+        hp: Math.round(104 * scale),
+        maxHp: Math.round(104 * scale),
         atk: Math.round(13 * scale),
         def: 5 + depth,
         xpReward: Math.round(48 * scale),
@@ -378,9 +378,9 @@ export function createEnemy(archetype: EnemyArchetype, x: number, y: number, dep
         color: '#FBBF24',
         x,
         y,
-        hp: Math.round(18 * scale),
-        maxHp: Math.round(18 * scale),
-        atk: Math.round(9 * scale),
+        hp: Math.round(41 * scale),
+        maxHp: Math.round(41 * scale),
+        atk: Math.round(10 * scale),
         def: 1,
         xpReward: Math.round(20 * scale),
         goldReward: Math.round(10 * scale),
@@ -397,8 +397,8 @@ export function createEnemy(archetype: EnemyArchetype, x: number, y: number, dep
         color: '#38BDF8',
         x,
         y,
-        hp: Math.round(31 * scale),
-        maxHp: Math.round(31 * scale),
+        hp: Math.round(71 * scale),
+        maxHp: Math.round(71 * scale),
         atk: Math.round(11 * scale),
         def: 2 + Math.floor(depth / 2),
         xpReward: Math.round(42 * scale),
@@ -417,8 +417,8 @@ export function createEnemy(archetype: EnemyArchetype, x: number, y: number, dep
         color: '#34D399',
         x,
         y,
-        hp: Math.round(27 * scale),
-        maxHp: Math.round(27 * scale),
+        hp: Math.round(62 * scale),
+        maxHp: Math.round(62 * scale),
         atk: Math.round(10 * scale),
         def: 2 + Math.floor(depth / 2),
         xpReward: Math.round(36 * scale),
@@ -436,8 +436,8 @@ export function createEnemy(archetype: EnemyArchetype, x: number, y: number, dep
         color: '#FB7185',
         x,
         y,
-        hp: Math.round(52 * scale),
-        maxHp: Math.round(52 * scale),
+        hp: Math.round(120 * scale),
+        maxHp: Math.round(120 * scale),
         atk: Math.round(14 * scale),
         def: 6 + depth,
         xpReward: Math.round(58 * scale),
@@ -456,11 +456,11 @@ export function createEnemy(archetype: EnemyArchetype, x: number, y: number, dep
         color: '#F472B6',
         x,
         y,
-        hp: 95,
-        maxHp: 95,
-        atk: 14,
-        def: 4,
-        xpReward: 130,
+        hp: 420,
+        maxHp: 420,
+        atk: 21,
+        def: 5,
+        xpReward: 180,
         goldReward: 65,
         isBoss: true,
         statuses: [],
@@ -476,11 +476,11 @@ export function createEnemy(archetype: EnemyArchetype, x: number, y: number, dep
         color: '#FB923C',
         x,
         y,
-        hp: 145,
-        maxHp: 145,
-        atk: 19,
-        def: 6,
-        xpReward: 210,
+        hp: 690,
+        maxHp: 690,
+        atk: 29,
+        def: 7,
+        xpReward: 280,
         goldReward: 110,
         isBoss: true,
         statuses: [],
@@ -496,11 +496,11 @@ export function createEnemy(archetype: EnemyArchetype, x: number, y: number, dep
         color: '#EF4444',
         x,
         y,
-        hp: 230,
-        maxHp: 230,
-        atk: 24,
-        def: 8,
-        xpReward: 400,
+        hp: 1000,
+        maxHp: 1000,
+        atk: 36,
+        def: 9,
+        xpReward: 550,
         goldReward: 250,
         isBoss: true,
         statuses: [],
@@ -973,10 +973,13 @@ export function generateDungeonFloor(
 
       const vaultPool = depth >= 6 ? abyssPool : (pools[depth] ?? pools[2]);
       const guardArch = vaultPool[Math.floor(Math.random() * vaultPool.length)];
+      // P1: guard is created at the floor's own depth and only becomes a
+      // randboss in the Abyss (depth >= 6), so a vault guard can no longer
+      // out-stat the final boss on the floor where he waits.
       const mainGuard = promoteEnemyRank(
-        createEnemy(guardArch, vx + 3, vy + 2, depth + 1),
-        depth + 1,
-        depth >= 5 ? 'randboss' : 'rare'
+        createEnemy(guardArch, vx + 3, vy + 2, depth),
+        depth,
+        depth >= 6 ? 'randboss' : 'rare'
       );
       enemies.push(mainGuard);
 
@@ -1432,6 +1435,19 @@ export function generateSideDungeonFloor(
       effectiveDepth + 1,
       'randboss'
     );
+    // P1: side bosses are tuned explicitly so none of them out-stats the
+    // final boss (the Kaelthar inversion: 359 HP / 57 ATK vs Malakor's
+    // 230 / 24 before this pass). Kaelthar needs the deepest cut because
+    // his warden base and effective depth 7 stack the highest.
+    const SIDE_BOSS_TUNE: Record<string, { hp: number; atk: number }> = {
+      boss_morvath: { hp: 1.25, atk: 0.9 },
+      boss_vexis: { hp: 1.25, atk: 0.9 },
+      boss_kaelthar: { hp: 0.62, atk: 0.6 },
+    };
+    const tune = SIDE_BOSS_TUNE[meta.boss.id] ?? { hp: 1, atk: 1 };
+    boss.hp = Math.round(boss.hp * tune.hp);
+    boss.maxHp = Math.round(boss.maxHp * tune.hp);
+    boss.atk = Math.max(1, Math.round(boss.atk * tune.atk));
     boss.id = meta.boss.id;
     boss.name = meta.boss.name;
     boss.rankTitle = meta.boss.title;
