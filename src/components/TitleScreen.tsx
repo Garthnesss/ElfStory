@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { User } from 'firebase/auth';
-import { Trash2, Trophy } from 'lucide-react';
+import { SlidersHorizontal, Trash2, Trophy } from 'lucide-react';
 import { CloudSaveSummary, SAVE_SLOTS } from '../game/cloudSave';
 import { PlayerState, SaveSlotId } from '../game/types';
 import titleBackdrop from '../assets/images/title_crypt_backdrop_1794536484639.jpg';
@@ -31,6 +31,7 @@ interface TitleScreenProps {
   onContinueCloud: (slotId: SaveSlotId) => void;
   onDeleteSlot: (slotId: SaveSlotId) => void;
   onOpenHallOfFame: () => void;
+  onOpenSettings: () => void;
   blockKeys?: boolean;
 }
 
@@ -98,6 +99,7 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
   onContinueCloud,
   onDeleteSlot,
   onOpenHallOfFame,
+  onOpenSettings,
   blockKeys = false,
 }) => {
   const [selectedClass, setSelectedClass] = useState<PlayerState['starterClass']>('Vanguard');
@@ -147,6 +149,15 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
             >
               <Trophy className="w-3.5 h-3.5" />
               <span>Hall of Fame{chronicleCount > 0 ? ` (${chronicleCount})` : ''}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={onOpenSettings}
+              className="min-h-[44px] px-3 py-1.5 rounded border border-white/15 bg-[#11151E]/90 hover:border-amber-400/50 text-[#ECE4D4] font-medium flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5" />
+              <span>Settings</span>
             </button>
 
             {authUser ? (

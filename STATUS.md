@@ -1,7 +1,7 @@
 # ElfStory — Status
 
 **Last updated:** 2026-11-14
-**Phase:** Phase 1 — "Difficulty that scales" (P1 rebalance complete, verified by simulation + tests; pushed to GitHub)
+**Phase:** Phase 2 — "Top-end shell" (P2 complete in the working tree, verified by tests + typecheck + build; awaiting Garth's review/push and a hand play-check)
 
 ## Where things stand
 - **Base game — RUNS** (verified Nov 14, 2026): clean install (`--legacy-peer-deps`, Node 24), `npm test` 11/11 pass, `tsc --noEmit` clean, `vite build` clean (single 1.22 MB JS chunk). HANDOFF.md claims audited against code and found unusually honest — all claimed systems present.
@@ -22,7 +22,12 @@
   - XP curve ×1.42 → ×1.30 per level so levels keep arriving in the Abyss; simulated full-clear death window moves from ~F25–40 to roughly **F33–42**, with pressure building gradually (hits-to-die 8 at F15 → ~3 at F40). Estimate from the sim, not a playthrough guarantee.
   - Potions scale: Crimson Draught heals max(flat, 35% of Max HP), Aether Vial restores max(flat, 40% of Max Mana).
   - Companions scale: max HP grows per level (lynx 24 + 7/level, owl 20 + 5/level, applied at bond, on level-up, and on companion swap), damage scaling raised, damage-intake reduction grows every 3 levels.
-- **Music / settings / tutorial / ending — NOT STARTED**: Phase 2.
+- **P2 top-end shell — DONE, VERIFIED** (Nov 14, 2026; `npm test` **35/35** — 17 prior + 18 new Phase 2 tests — `tsc --noEmit` clean, `vite build` clean; built, not yet hand-played):
+  - **Settings menu** (`src/components/SettingsModal.tsx`, reachable from the Title Screen and the Pause menu): SFX volume, music volume, master mute, screen-shake toggle, and the map tile zoom — all applied live and persisted per-device via `src/game/settings.ts` (new `elfstory-settings` blob; the P0 `elfstory-muted` key is still honoured on load and rewritten on save, and old saves need no migration since settings live outside save bundles).
+  - **Music** (`src/game/audio.ts`): fully procedural Web Audio in the existing SoundEngine — generative pad chords + sparse pentatonic melody in a minor key, three themes (calm town/overworld in D minor, tense dungeon in A minor, driving boss variant with root pulse) chosen by `resolveMusicTheme`, crossfade on theme change, starts only after the first user gesture, honours music volume + mute. No audio asset files.
+  - **Tutorial** (`src/game/tutorial.ts` + `TutorialOverlay`): six coach-mark steps (move → talk → fight → skills → potion → rest/save) on a fresh expedition, once per device (`elfstory-tutorial-done`), auto-advancing when the coached action is performed, always skippable/advanceable by hand, non-blocking, and re-openable from the Guide ("Replay the First-Run Tutorial").
+  - **Real ending** (`src/components/EndingScreen.tsx`): killing Malakor now opens a dedicated ending screen instead of the pause modal — epilogue text that reflects the Bell, Ledger, and Blight choices plus the weakened-ward flag, run stats (level, kills, turns, gold, expedition time), and three exits: Continue into the Endless Abyss (resumes play at the Floor 5 stair), Play Again, Return to Title (Hall of Fame stays one tap away). Victory flag/chronicle behaviour is unchanged.
+  - **Quest tracker** (`src/components/QuestTracker.tsx`): the Journal's stage-aware "Next:" guidance is now derived in `src/game/quests.ts` (single source of truth — the Journal imports it too) and pinned on the HUD: main quest on top, tracked side quest beneath it, compact on small screens, hidden while dialogues/prompts own the screen.
 
 ## Decisions made
 - Audit first, fix second (Nov 14, 2026, Garth).
@@ -36,5 +41,6 @@
 
 ## Next actions
 - [x] Muse: finish P0 (ErrorBoundary, regression tests, test/lint/build green — Nov 14, 2026).
-- [ ] Garth: drop the fixed tree (`elfstory-p0-fixed.zip`) into the new `elfstory` repo and push; run the game once by hand.
-- [ ] Garth: say the word on P1 (difficulty pass).
+- [x] Muse: P1 difficulty rebalance (Nov 14, 2026) and P2 top-end shell (Nov 14, 2026) — tests/typecheck/build green for both.
+- [ ] Garth: review + push the P2 working tree; run the game once by hand (fresh expedition: does the tutorial read well, does the music sit right, does the ending land?).
+- [ ] Garth: push the JPG commit from the Mac clone (see Open decisions #1).

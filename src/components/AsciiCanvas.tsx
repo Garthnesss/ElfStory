@@ -46,6 +46,10 @@ interface AsciiCanvasProps {
   projectiles: ProjectileEffect[];
   hitFlashes: HitFlash[];
   shakeUntil: number;
+  /** Controlled tile zoom (Phase 2 settings). When omitted, the canvas
+   *  manages its own persisted zoom exactly as before. */
+  tileSize?: number;
+  onTileSizeChange?: (tileSize: number) => void;
   onTileClick: (x: number, y: number) => void;
   onStep?: (dx: number, dy: number) => void;
   onCancelTargeting?: () => void;
@@ -145,13 +149,15 @@ export const AsciiCanvas: React.FC<AsciiCanvasProps> = ({
   projectiles,
   hitFlashes,
   shakeUntil,
+  tileSize: controlledTileSize,
+  onTileSizeChange,
   onTileClick,
   onStep,
   onCancelTargeting,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [tileSize, setTileSize] = useState<number>(() => {
+  const [internalTileSize, setInternalTileSize] = useState<number>(() => {
     // Persisted zoom preference (previously reset to 36 on every reload).
     try {
       const v = Number(localStorage.getItem('elfstory-tile-size'));
@@ -161,6 +167,13 @@ export const AsciiCanvas: React.FC<AsciiCanvasProps> = ({
     }
     return 36;
   });
+
+  // Controlled when App passes tileSize (settings menu); otherwise internal.
+  const tileSize = controlledTileSize ?? internalTileSize;
+  const setTileSize = (next: number) => {
+    if (onTileSizeChange) onTileSizeChange(next);
+    else setInternalTileSize(next);
+  };
 
   useEffect(() => {
     try {

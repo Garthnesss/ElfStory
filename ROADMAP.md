@@ -19,14 +19,14 @@ Nov 14, 2026 adversarial audit and Garth's picks from its decision pack.
 - Decide the intended Endless Abyss death curve and tune XP curve / enemy ATK growth to land there (currently: level stalls ~20, guaranteed death ~floor 25–40).
 - Gate: simulation (audit's `difficulty_sim.py` method) shows TTK 2–5 on normal enemies per floor, bosses surviving a real rotation, and no boss inversion; plus a played full run by Garth.
 
-## Phase 2 — "Top-end shell" (P2)
-- Settings menu: volume, difficulty select, key rebinding, text size, colourblind-safe rarity/hazard signalling, screen-shake/flash toggles — all persisted.
-- Music + ambience layer (procedural Web Audio in the existing SoundEngine style is acceptable).
-- Guided onboarding: first-fight coaching + coach-marks when telegraphs, inscriptions, and prodigies first appear.
-- Real ending: epilogue reflecting the Ledger and Bell choices, credits, completion stamp on the save slot.
-- HUD objective tracker: surface the Quest Journal's existing stage-aware "Next:" text on the HUD.
-- Autosave hardening + save version field and per-slot corruption isolation (audit finding #7).
-- Gate: a cold player (not Garth, not the developer) completes floor 1 unaided; settings persist across reload; killing Malakor plays the ending.
+## Phase 2 — "Top-end shell" (P2 — DONE Nov 14, 2026 for the five delivered features; see STATUS.md)
+- Settings menu ✔: SFX/music volume sliders, master mute, screen-shake toggle, tile zoom — persisted per-device and applied live. (Not delivered: difficulty select, key rebinding, text size, colourblind-safe signalling — carried to follow-ups below.)
+- Music + ambience layer ✔: procedural Web Audio in the SoundEngine — generative minor-key pad + melody themes for town/overworld, dungeon, and boss, crossfading on zone type, gesture-gated start.
+- Guided onboarding ✔: six-step first-run coach-mark sequence (move, talk, fight, skills, potion, rest/save), once per device, skippable, auto-advancing on the coached action, replayable from the Guide. (Not delivered: contextual coach-marks at first telegraph/inscription/prodigy sighting.)
+- Real ending ✔: dedicated ending screen with choice-reflecting epilogue (Ledger, Bell, Blight, weakened ward), run stats, and Continue-to-Abyss / Play Again / Title exits. (Not delivered: credits roll, completion stamp on the save slot.)
+- HUD objective tracker ✔: the Journal's stage-aware "Next:" text, derived in `src/game/quests.ts`, pinned on the HUD (main + tracked side quest).
+- Carried to follow-ups: autosave hardening + save version field and per-slot corruption isolation (audit finding #7); difficulty select / key rebinding / text size / colourblind signalling; ending credits + save-slot completion stamp.
+- Gate: a cold player (not Garth, not the developer) completes floor 1 unaided; settings persist across reload; killing Malakor plays the ending. (Settings persistence and the ending path are test/build-verified; the cold-player gate is still Garth's to run.)
 
 ## Phase 3 — "Content depth" (P3)
 - 3–5 hand-built set-piece / puzzle rooms per biome (generator is currently bare rectangles only).

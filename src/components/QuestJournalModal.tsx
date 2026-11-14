@@ -3,6 +3,7 @@ import { Award, BookOpen, Skull, X } from 'lucide-react';
 import { ALL_BESTIARY_LIST, computeBestiaryPerks, FEAT_DEFS } from '../game/codex';
 import { formatStatList } from '../game/loot';
 import { LORE_ENTRIES, QUEST_DEFS } from '../game/npcs';
+import { getQuestNextHint } from '../game/quests';
 import { QuestProgress, WorldFlags } from '../game/types';
 
 interface QuestJournalModalProps {
@@ -14,57 +15,6 @@ interface QuestJournalModalProps {
 type CodexTab = 'quests' | 'bestiary' | 'feats';
 
 const TOTAL_STELE_COUNT = Object.keys(LORE_ENTRIES).length;
-
-function getQuestNextHint(q: QuestProgress, worldFlags: WorldFlags): string {
-  if (q.id === 'shadows_beneath') {
-    if (q.stage >= 2) return 'Next: Deliver the Sealed Contraband Ledger to Warden Vance or Smuggler Vex in Oakhaven.';
-    return 'Next: Descend to Sunken Reliquary Floor 1 and locate the glowing Smuggler Cache (▤).';
-  }
-  if (q.id === 'herbalist_blight') {
-    if (q.stage >= 2) return 'Next: Return to Herbalist Mira in Oakhaven with the cure or peace pact.';
-    return 'Next: Gather Pale Nightbloom (✿) on Floors 1–2, or commune with the Bone Cantor.';
-  }
-  if (q.id === 'whispering_bell') {
-    if (q.stage >= 2) return 'Next: Bring the Whispering Bell to Archivist Lyra or Corvus in Highspire Citadel.';
-    return 'Next: Reach Ember Vaults (Floor 3) and recover the Whispering Bell (⍾).';
-  }
-  if (q.id === 'sovereign_cinder') {
-    if (worldFlags.malakorWeakened) {
-      return 'Malakor’s ward is weakened! Descend to Floor 5 (Obsidian Sanctum) and end his reign.';
-    }
-    return 'Next: Fight down to Floor 5 — Obsidian Sanctum — and defeat Malakor, Sovereign of Cinder.';
-  }
-  if (q.id === 'outrider_oath') {
-    const attuned = worldFlags.waystonesAttuned ?? 0;
-    if (q.stage >= 3 || attuned >= 2) {
-      return 'Next: Return to Archivist Lyra in Highspire Citadel to claim your Starlight Outrider Relic.';
-    }
-    return `Next: Attune Elven Waystones (◈) found in Silverwood Vale and dungeon chambers (${Math.min(2, attuned)}/2 attuned).`;
-  }
-  if (q.id === 'silverwood_road') {
-    if (q.stage >= 2) return 'Next: Return Rowan’s Stolen Satchel to Rowan at Silverbridge Camp in Silverwood Vale.';
-    return 'Next: Cross Silverbridge in Silverwood Vale (Overworld) and loot the Brigand Tollhouse Chest ($).';
-  }
-  if (q.id === 'spores_of_bog') {
-    if (q.stage >= 2 || worldFlags.mireBossDefeated) {
-      return 'Next: Deliver the Bioluminescent Fungal Heart to Elder Sylva in Thornwick Fen.';
-    }
-    return 'Next: Enter Fungal Hollow (2 floors) east of Thornwick Fen and slay Spore-Matron Vexis.';
-  }
-  if (q.id === 'barrow_purge') {
-    if (q.stage >= 2 || worldFlags.barrowBossDefeated) {
-      return 'Next: Present Morvath’s Barrow Seal to Captain Darek in Cinderwatch Bastion.';
-    }
-    return 'Next: Descend Whispering Barrow (2 floors) in northern Silverwood Vale and defeat Arch-Wight Morvath.';
-  }
-  if (q.id === 'cinder_and_frost') {
-    if (q.stage >= 2 || worldFlags.frostBossDefeated) {
-      return 'Next: Return the Ashen Ore Heart to Forgemistress Halda in Cinderwatch Bastion.';
-    }
-    return 'Next: Conquer Frostpeak & Ashen Caldera (3 floors) northeast of Cinderwatch and slay Ignis-Warden Kaelthar.';
-  }
-  return 'Follow leads across Oakhaven, Silverwood Vale, Thornwick Fen, Cinderwatch, and Highspire.';
-}
 
 export const QuestJournalModal: React.FC<QuestJournalModalProps> = ({
   quests,

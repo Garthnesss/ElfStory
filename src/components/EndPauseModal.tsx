@@ -15,6 +15,8 @@ interface EndPauseModalProps {
   onOpenHallOfFame: () => void;
   onPlayAgain: () => void;
   onReturnToTitle: () => void;
+  /** Phase 2: settings are reachable from the pause menu too. */
+  onOpenSettings?: () => void;
 }
 
 const SLOT_LABEL: Record<SaveSlotId, string> = {
@@ -36,6 +38,7 @@ export const EndPauseModal: React.FC<EndPauseModalProps> = ({
   onOpenHallOfFame,
   onPlayAgain,
   onReturnToTitle,
+  onOpenSettings,
 }) => {
   const title =
     mode === 'VICTORY'
@@ -135,6 +138,15 @@ export const EndPauseModal: React.FC<EndPauseModalProps> = ({
                   className="min-h-[44px] w-full py-2.5 rounded border border-sky-400/40 bg-[#111A29] hover:bg-[#18253A] text-sky-100 font-medium text-sm cursor-pointer"
                 >
                   Sign in with Google for Cloud Saves
+                </button>
+              )}
+              {onOpenSettings && (
+                <button
+                  type="button"
+                  onClick={onOpenSettings}
+                  className="min-h-[44px] w-full py-2.5 rounded border border-white/15 bg-[#161B26] hover:border-amber-400/50 text-[#ECE4D4] font-medium text-sm cursor-pointer"
+                >
+                  Settings
                 </button>
               )}
             </>

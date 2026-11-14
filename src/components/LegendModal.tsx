@@ -3,6 +3,8 @@ import { X } from 'lucide-react';
 
 interface LegendModalProps {
   onClose: () => void;
+  /** Phase 2: the first-run tutorial can be replayed from the Guide. */
+  onReplayTutorial?: () => void;
 }
 
 const TILE_ITEMS = [
@@ -44,7 +46,7 @@ const CONTROLS = [
   { key: 'Enter / Space / Esc', action: 'Accept dialogue/prompts or close/cancel targeting & open Menu' },
 ];
 
-export const LegendModal: React.FC<LegendModalProps> = ({ onClose }) => {
+export const LegendModal: React.FC<LegendModalProps> = ({ onClose, onReplayTutorial }) => {
   return (
     <div className="fixed inset-0 z-40 bg-black/75 flex items-center justify-center p-2.5 sm:p-5">
       <div className="w-full max-w-3xl rounded-md border border-white/15 bg-[#10141D] shadow-2xl flex flex-col max-h-[90dvh]">
@@ -66,6 +68,16 @@ export const LegendModal: React.FC<LegendModalProps> = ({ onClose }) => {
         </div>
 
         <div className="p-4 sm:p-6 overflow-y-auto rpg-scroll space-y-5">
+          {onReplayTutorial && (
+            <button
+              type="button"
+              onClick={onReplayTutorial}
+              className="w-full min-h-[44px] py-2.5 rounded border border-sky-400/40 bg-sky-500/10 hover:bg-sky-500/20 text-sky-100 font-medium text-sm cursor-pointer"
+            >
+              Replay the First-Run Tutorial
+            </button>
+          )}
+
           <div className="p-3.5 rounded border border-amber-500/25 bg-amber-500/8 text-xs text-slate-300 leading-relaxed">
             <span className="font-semibold text-amber-200">The Expedition:</span> Centuries after the First Ember sealed
             Sovereign Malakor beneath the Sunken Citadel, the Ashen Glyph stirs once more. Step outside Oakhaven’s gate

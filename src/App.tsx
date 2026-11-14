@@ -6,17 +6,36 @@ import { AsciiCanvas } from './components/AsciiCanvas';
 import { CharacterSkillsModal } from './components/CharacterSkillsModal';
 import { DialogueModal } from './components/DialogueModal';
 import { EndPauseModal } from './components/EndPauseModal';
+import { EndingScreen } from './components/EndingScreen';
 import { HallOfFameModal } from './components/HallOfFameModal';
 import { InventoryModal } from './components/InventoryModal';
 import { LegendModal } from './components/LegendModal';
 import { MerchantModal } from './components/MerchantModal';
 import { QuestJournalModal } from './components/QuestJournalModal';
+import { QuestTracker } from './components/QuestTracker';
+import { SettingsModal } from './components/SettingsModal';
 import { SpecialEncounterModal, SpecialPrompt } from './components/SpecialEncounterModal';
+import { TutorialOverlay } from './components/TutorialOverlay';
 import { LocalSlotSummary, TitleScreen } from './components/TitleScreen';
 import { TopHud } from './components/TopHud';
 import { TownUpgradesModal } from './components/TownUpgradesModal';
 import { TravelModal } from './components/TravelModal';
-import { soundEngine } from './game/audio';
+import { resolveMusicTheme, soundEngine } from './game/audio';
+import {
+  GameSettings,
+  isTutorialDone,
+  loadSettings,
+  loadTileSize,
+  markTutorialDone,
+  saveSettings,
+  saveTileSize,
+} from './game/settings';
+import {
+  countConsumables,
+  isTutorialStepComplete,
+  TUTORIAL_STEPS,
+  TutorialBaseline,
+} from './game/tutorial';
 import {
   checkAuthRedirectResult,
   CloudSavePayload,
@@ -357,20 +376,43 @@ function uid(prefix: string): string {
 export default function App() {
   const [gameState, setGameState] = useState<GameState>('TITLE_MENU');
   const [activePanel, setActivePanel] = useState<ActivePanel>('NONE');
-  const [muted, setMuted] = useState<boolean>(() => {
-    // Persisted mute preference (previously reset on every reload).
-    try {
-      const v = localStorage.getItem('elfstory-muted');
-      if (v !== null) {
-        const m = v === '1';
-        soundEngine.setMuted(m);
-        return m;
-      }
-    } catch {
-      // storage unavailable — fall through to engine default
-    }
-    return soundEngine.isMuted();
+  // Phase 2 settings: one persisted snapshot (volumes, mute, screen shake —
+  // loadSettings also honours the P0-era 'elfstory-muted' key) applied live
+  // to the sound engine and persisted on every change.
+  const [settings, setSettings] = useState<GameSettings>(() => {
+    const loaded = loadSettings();
+    soundEngine.applyAudioSettings(loaded);
+    return loaded;
   });
+  const muted = settings.muted;
+  const settingsRef = useRef(settings);
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
+  const updateSettings = useCallback((patch: Partial<GameSettings>) => {
+    setSettings((prev) => {
+      const next = { ...prev, ...patch };
+      saveSettings(next);
+      soundEngine.applyAudioSettings(next);
+      return next;
+    });
+  }, []);
+
+  const [tileSize, setTileSize] = useState<number>(() => loadTileSize());
+  const handleTileSizeChange = useCallback((next: number) => {
+    setTileSize(next);
+    saveTileSize(next);
+  }, []);
+
+  const [showSettings, setShowSettings] = useState(false);
+
+  // First-run tutorial (Phase 2): current step index, or null when inactive.
+  const [tutorialStepIdx, setTutorialStepIdx] = useState<number | null>(null);
+  const tutorialBaselineRef = useRef<TutorialBaseline | null>(null);
+  const tutorialRestedRef = useRef(false);
+
+  // Wall-clock start of the current expedition (ending-screen stat).
+  const runStartedAtRef = useRef<number>(Date.now());
 
   const [player, setPlayer] = useState<PlayerState>(() => createInitialPlayer('Vanguard'));
   const [zones, setZones] = useState<Record<ZoneId, ZoneMap>>(() => createInitialZones());
@@ -487,6 +529,96 @@ export default function App() {
   const currentZone = zones[currentZoneId];
   const derived = useMemo(() => computeDerivedStats(player, worldFlags), [player, worldFlags]);
 
+  // ---- Phase 2: procedural music ---------------------------------------
+  // Audio may only start after a user gesture; the engine's scheduler idles
+  // until its context exists and is running, so this unlock listener plus
+  // the theme effect below are all the wiring the music layer needs.
+  useEffect(() => {
+    const unlock = () => soundEngine.noteUserGesture();
+    window.addEventListener('pointerdown', unlock);
+    window.addEventListener('keydown', unlock);
+    return () => {
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+    };
+  }, []);
+
+  const bossAlerted = currentZone.enemies.some((e) => e.isBoss && e.alerted);
+  const musicTheme = resolveMusicTheme({
+    isTown: currentZone.isTown,
+    zoneId: currentZoneId,
+    bossAlerted,
+  });
+  useEffect(() => {
+    soundEngine.startMusic(musicTheme);
+  }, [musicTheme]);
+
+  // ---- Phase 2: first-run tutorial --------------------------------------
+  const finishTutorial = useCallback(() => {
+    markTutorialDone();
+    setTutorialStepIdx(null);
+  }, []);
+
+  const advanceTutorial = useCallback(() => {
+    setTutorialStepIdx((idx) => {
+      if (idx === null) return null;
+      if (idx >= TUTORIAL_STEPS.length - 1) {
+        markTutorialDone();
+        return null;
+      }
+      return idx + 1;
+    });
+  }, []);
+
+  // Snapshot the watched signals whenever a step becomes current.
+  useEffect(() => {
+    if (tutorialStepIdx === null) {
+      tutorialBaselineRef.current = null;
+      return;
+    }
+    tutorialBaselineRef.current = {
+      x: player.x,
+      y: player.y,
+      kills: player.kills,
+      consumableCount: countConsumables(player.inventory),
+    };
+    // Baseline is intentionally captured once per step, not per player change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tutorialStepIdx]);
+
+  // Opening the pause menu also satisfies the rest/save step (it is where
+  // saving lives); Safe Rest sets the same ref directly in its handler.
+  useEffect(() => {
+    if (gameState === 'PAUSED') tutorialRestedRef.current = true;
+  }, [gameState]);
+
+  // Auto-advance when the coached action is performed.
+  useEffect(() => {
+    if (tutorialStepIdx === null || gameState !== 'PLAYING') return;
+    const baseline = tutorialBaselineRef.current;
+    if (!baseline) return;
+    const step = TUTORIAL_STEPS[tutorialStepIdx];
+    if (!step) return;
+    const complete = isTutorialStepComplete(step.id, baseline, {
+      x: player.x,
+      y: player.y,
+      kills: player.kills,
+      consumableCount: countConsumables(player.inventory),
+      dialogueOpen: activeDialogue !== null,
+      anySkillOnCooldown:
+        Object.values(player.cooldowns).some((v) => (v ?? 0) > 0) ||
+        (player.inscriptionCooldowns ?? []).some((v) => (v ?? 0) > 0),
+      restedOrSaved: tutorialRestedRef.current,
+    });
+    if (complete) advanceTutorial();
+  }, [tutorialStepIdx, gameState, player, activeDialogue, advanceTutorial]);
+
+  const replayTutorial = useCallback(() => {
+    setActivePanel('NONE');
+    tutorialRestedRef.current = false;
+    setTutorialStepIdx(0);
+  }, []);
+
   const mergedChronicles = useMemo(() => {
     const byId = new Map<string, ChronicleEntry>();
     for (const c of localChronicles) byId.set(c.id, c);
@@ -556,6 +688,9 @@ export default function App() {
   }, []);
 
   const triggerShake = useCallback((ms = 160) => {
+    // Screen-shake is a settings toggle (Phase 2) — read through the ref so
+    // this callback's identity stays stable for the many dep arrays below.
+    if (!settingsRef.current.screenShake) return;
     setShakeUntil(performance.now() + ms);
   }, []);
 
@@ -909,6 +1044,10 @@ export default function App() {
           tone: 'neutral',
         },
       ]);
+      runStartedAtRef.current = Date.now();
+      tutorialRestedRef.current = false;
+      // First-run tutorial: once per device, only on a fresh expedition.
+      setTutorialStepIdx(isTutorialDone() ? null : 0);
       setGameState('PLAYING');
     },
     [activeSlot, cloudSlotMap, localSlotMap]
@@ -963,6 +1102,8 @@ export default function App() {
     setAimedTarget(null);
     setAutoExploring(false);
     setZoneBanner(null);
+    runStartedAtRef.current = Date.now();
+    setTutorialStepIdx(null);
     setGameState('PLAYING');
     soundEngine.playClick();
   }, []);
@@ -4246,6 +4387,7 @@ export default function App() {
       'arcane',
       restedPlayer.turnsElapsed
     );
+    tutorialRestedRef.current = true;
     setPlayer(restedPlayer);
   }, [activePanel, currentZone, gameState, player, pushLog, spawnBurst, spawnFloating, specialPrompt, worldFlags]);
 
@@ -5271,6 +5413,7 @@ export default function App() {
           onContinueCloud={handleContinueCloud}
           onDeleteSlot={handleDeleteSlot}
           onOpenHallOfFame={() => setShowHallOfFame(true)}
+          onOpenSettings={() => setShowSettings(true)}
           blockKeys={showHallOfFame}
         />
         {showHallOfFame && (
@@ -5278,6 +5421,15 @@ export default function App() {
             entries={mergedChronicles}
             isSignedIn={Boolean(authUser)}
             onClose={() => setShowHallOfFame(false)}
+          />
+        )}
+        {showSettings && (
+          <SettingsModal
+            settings={settings}
+            tileSize={tileSize}
+            onSettingsChange={updateSettings}
+            onTileSizeChange={handleTileSizeChange}
+            onClose={() => setShowSettings(false)}
           />
         )}
       </>
@@ -5309,13 +5461,9 @@ export default function App() {
         derived={derived}
         muted={muted}
         onToggleMute={() => {
-          const m = soundEngine.toggleMute();
-          setMuted(m);
-          try {
-            localStorage.setItem('elfstory-muted', m ? '1' : '0');
-          } catch {
-            // ignore — preference just won't persist
-          }
+          const next = !settings.muted;
+          updateSettings({ muted: next });
+          if (!next) soundEngine.playClick();
         }}
         onOpenPanel={(p) => {
           soundEngine.playClick();
@@ -5345,6 +5493,8 @@ export default function App() {
           projectiles={projectiles}
           hitFlashes={hitFlashes}
           shakeUntil={shakeUntil}
+          tileSize={tileSize}
+          onTileSizeChange={handleTileSizeChange}
           onTileClick={handleTileClick}
           onStep={(dx, dy) => {
             setAutoExploring(false);
@@ -5356,6 +5506,15 @@ export default function App() {
             setAimedTarget(null);
           }}
         />
+
+        {/* Phase 2: pinned quest objectives (same derivation as the Journal) */}
+        {gameState === 'PLAYING' && (
+          <QuestTracker
+            quests={quests}
+            worldFlags={worldFlags}
+            hidden={Boolean(activeDialogue || specialPrompt)}
+          />
+        )}
 
         {/* Subtle Non-Blocking Status Badges in Top-Left */}
         {player.statuses.length > 0 && (
@@ -5503,6 +5662,22 @@ export default function App() {
             <div />
           </div>
         )}
+
+        {/* Phase 2: first-run tutorial coach-mark (non-blocking) */}
+        {tutorialStepIdx !== null &&
+          gameState === 'PLAYING' &&
+          activePanel === 'NONE' &&
+          !activeDialogue &&
+          !specialPrompt &&
+          TUTORIAL_STEPS[tutorialStepIdx] && (
+            <TutorialOverlay
+              step={TUTORIAL_STEPS[tutorialStepIdx]}
+              stepIndex={tutorialStepIdx}
+              totalSteps={TUTORIAL_STEPS.length}
+              onNext={advanceTutorial}
+              onSkip={finishTutorial}
+            />
+          )}
       </main>
 
       <ActionDock
@@ -5619,14 +5794,37 @@ export default function App() {
       )}
 
       {activePanel === 'LEGEND' && (
-        <LegendModal onClose={() => setActivePanel('NONE')} />
+        <LegendModal onClose={() => setActivePanel('NONE')} onReplayTutorial={replayTutorial} />
       )}
 
       {specialPrompt && (
         <SpecialEncounterModal prompt={specialPrompt} onClose={() => setSpecialPrompt(null)} />
       )}
 
-      {(gameState === 'PAUSED' || gameState === 'VICTORY' || gameState === 'GAME_OVER') && (
+      {gameState === 'VICTORY' && (
+        <EndingScreen
+          player={player}
+          derived={derived}
+          worldFlags={worldFlags}
+          playTimeMs={Date.now() - runStartedAtRef.current}
+          onContinueAbyss={() => {
+            pushLog(
+              'The cinder-throne is empty. Below Floor 5, the Abyssal Stair descends into the Endless Abyss.',
+              'quest',
+              player.turnsElapsed
+            );
+            setGameState('PLAYING');
+          }}
+          onOpenHallOfFame={() => setShowHallOfFame(true)}
+          onPlayAgain={() => handleStartNew(player.starterClass, activeSlot)}
+          onReturnToTitle={() => {
+            setActivePanel('NONE');
+            setGameState('TITLE_MENU');
+          }}
+        />
+      )}
+
+      {(gameState === 'PAUSED' || gameState === 'GAME_OVER') && (
         <EndPauseModal
           mode={gameState}
           activeSlot={activeSlot}
@@ -5698,6 +5896,17 @@ export default function App() {
             setActivePanel('NONE');
             setGameState('TITLE_MENU');
           }}
+          onOpenSettings={() => setShowSettings(true)}
+        />
+      )}
+
+      {showSettings && (
+        <SettingsModal
+          settings={settings}
+          tileSize={tileSize}
+          onSettingsChange={updateSettings}
+          onTileSizeChange={handleTileSizeChange}
+          onClose={() => setShowSettings(false)}
         />
       )}
 

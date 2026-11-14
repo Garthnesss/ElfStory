@@ -1,6 +1,113 @@
+// SoundEngine: procedural Web Audio SFX (original) + Phase 2 additions —
+// per-channel volume control and a generative music layer. Music is fully
+// synthesized (pad chords + sparse minor-key melody, no audio assets),
+// scheduled bar-by-bar through a lookahead pump that only runs once an
+// AudioContext exists and is running (i.e. after a user gesture).
+
+export type MusicTheme = 'town' | 'dungeon' | 'boss';
+
+/**
+ * Pick the music theme for a zone. Pure helper (unit-tested):
+ * towns and the Silverwood overworld are calm; an alerted boss anywhere
+ * else takes over; everything else is the tense dungeon loop.
+ */
+export function resolveMusicTheme(input: {
+  isTown: boolean;
+  zoneId: string;
+  bossAlerted: boolean;
+}): MusicTheme {
+  if (input.isTown || input.zoneId === 'overworld') return 'town';
+  if (input.bossAlerted) return 'boss';
+  return 'dungeon';
+}
+
+interface MusicThemeDef {
+  barSeconds: number;
+  slotsPerBar: number;
+  /** Chord voicings as MIDI note numbers, one chord per bar, looping. */
+  chords: number[][];
+  /** Melody note pool (MIDI), minor pentatonic of the theme key. */
+  melodyPool: number[];
+  /** Probability a melody slot actually sounds (sparseness control). */
+  melodyChance: number;
+  padGain: number;
+  melodyGain: number;
+  /** Boss themes add a driving root pulse on every slot. */
+  pulse: boolean;
+}
+
+const MUSIC_THEMES: Record<MusicTheme, MusicThemeDef> = {
+  // D minor, slow and warm: Dm – B♭ – F – C.
+  town: {
+    barSeconds: 4.8,
+    slotsPerBar: 4,
+    chords: [
+      [50, 53, 57, 62],
+      [46, 50, 53, 57],
+      [48, 53, 57, 60],
+      [48, 52, 55, 59],
+    ],
+    melodyPool: [62, 65, 67, 69, 72, 74],
+    melodyChance: 0.38,
+    padGain: 0.042,
+    melodyGain: 0.05,
+    pulse: false,
+  },
+  // A minor, low and sparse: Am – F – Am – E.
+  dungeon: {
+    barSeconds: 5.6,
+    slotsPerBar: 4,
+    chords: [
+      [45, 48, 52, 57],
+      [41, 45, 48, 53],
+      [45, 48, 52, 59],
+      [40, 44, 47, 52],
+    ],
+    melodyPool: [57, 60, 62, 64, 67, 69],
+    melodyChance: 0.22,
+    padGain: 0.05,
+    melodyGain: 0.045,
+    pulse: false,
+  },
+  // D minor, driving: Dm – Dm – B♭ – A, root pulse on eighth slots.
+  boss: {
+    barSeconds: 3.2,
+    slotsPerBar: 8,
+    chords: [
+      [38, 50, 53, 57],
+      [38, 50, 53, 60],
+      [46, 50, 53, 58],
+      [45, 49, 52, 57],
+    ],
+    melodyPool: [62, 65, 67, 69, 72, 74, 77],
+    melodyChance: 0.5,
+    padGain: 0.038,
+    melodyGain: 0.05,
+    pulse: true,
+  },
+};
+
+function midiToFreq(midi: number): number {
+  return 440 * Math.pow(2, (midi - 69) / 12);
+}
+
 class SoundEngine {
   private ctx: AudioContext | null = null;
   private muted = false;
+  private sfxVolume = 0.9;
+  private musicVolume = 0.65;
+  private sfxBus: GainNode | null = null;
+  private musicBus: GainNode | null = null;
+  private musicFade: GainNode | null = null;
+
+  // Music scheduler state.
+  private musicTheme: MusicTheme | null = null;
+  private pendingTheme: MusicTheme | null = null;
+  private pendingThemeAt = 0;
+  private musicTimer: number | null = null;
+  private nextBarAt = 0;
+  private barCount = 0;
+  private melodyCursor = 2;
 
   private ensureContext(): AudioContext | null {
     if (this.muted) return null;
@@ -9,11 +116,24 @@ class SoundEngine {
       const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       if (!AudioCtx) return null;
       this.ctx = new AudioCtx();
+      this.sfxBus = this.ctx.createGain();
+      this.sfxBus.connect(this.ctx.destination);
+      this.musicBus = this.ctx.createGain();
+      this.musicBus.connect(this.ctx.destination);
+      this.musicFade = this.ctx.createGain();
+      this.musicFade.connect(this.musicBus);
+      this.applyBusGains();
     }
     if (this.ctx.state === 'suspended') {
       this.ctx.resume().catch(() => {});
     }
     return this.ctx;
+  }
+
+  private applyBusGains(): void {
+    if (!this.ctx) return;
+    if (this.sfxBus) this.sfxBus.gain.value = this.muted ? 0 : this.sfxVolume;
+    if (this.musicBus) this.musicBus.gain.value = this.muted ? 0 : this.musicVolume;
   }
 
   public isMuted(): boolean {
@@ -22,15 +142,200 @@ class SoundEngine {
 
   public setMuted(muted: boolean): void {
     this.muted = muted;
+    this.applyBusGains();
   }
 
   public toggleMute(): boolean {
     this.muted = !this.muted;
+    this.applyBusGains();
     if (!this.muted) {
       this.playClick();
     }
     return this.muted;
   }
+
+  public getSfxVolume(): number {
+    return this.sfxVolume;
+  }
+
+  public getMusicVolume(): number {
+    return this.musicVolume;
+  }
+
+  public setSfxVolume(volume: number): void {
+    this.sfxVolume = Math.min(1, Math.max(0, volume));
+    this.applyBusGains();
+  }
+
+  public setMusicVolume(volume: number): void {
+    this.musicVolume = Math.min(1, Math.max(0, volume));
+    this.applyBusGains();
+  }
+
+  /** Apply a full settings snapshot (from game/settings.ts) at once. */
+  public applyAudioSettings(settings: { sfxVolume: number; musicVolume: number; muted: boolean }): void {
+    this.sfxVolume = Math.min(1, Math.max(0, settings.sfxVolume));
+    this.musicVolume = Math.min(1, Math.max(0, settings.musicVolume));
+    this.muted = settings.muted;
+    this.applyBusGains();
+  }
+
+  /** Call from a real user gesture (pointer/key) so the AudioContext may
+   *  start — browsers refuse audible audio before one. Safe to call often. */
+  public noteUserGesture(): void {
+    this.ensureContext();
+  }
+
+  // ---------------------------------------------------------------- music
+
+  /** Request a theme. Switching crossfades through the fade bus; starting
+   *  is deferred until the context exists and is running (post-gesture). */
+  public startMusic(theme: MusicTheme): void {
+    if (this.musicTheme === theme && !this.pendingTheme) {
+      this.ensureMusicPump();
+      return;
+    }
+    if (this.musicTheme === null) {
+      this.musicTheme = theme;
+      this.barCount = 0;
+      this.nextBarAt = 0;
+      this.ensureMusicPump();
+      return;
+    }
+    // Theme change: fade out, swap at the bottom of the fade, fade back in.
+    this.pendingTheme = theme;
+    if (this.ctx && this.musicFade) {
+      const now = this.ctx.currentTime;
+      this.pendingThemeAt = now + 0.45;
+      this.musicFade.gain.cancelScheduledValues(now);
+      this.musicFade.gain.setValueAtTime(this.musicFade.gain.value, now);
+      this.musicFade.gain.linearRampToValueAtTime(0.0001, now + 0.4);
+    } else {
+      this.pendingThemeAt = 0;
+    }
+    this.ensureMusicPump();
+  }
+
+  public stopMusic(): void {
+    this.musicTheme = null;
+    this.pendingTheme = null;
+    if (this.musicTimer !== null && typeof window !== 'undefined') {
+      window.clearInterval(this.musicTimer);
+      this.musicTimer = null;
+    }
+    if (this.ctx && this.musicFade) {
+      const now = this.ctx.currentTime;
+      this.musicFade.gain.cancelScheduledValues(now);
+      this.musicFade.gain.setValueAtTime(this.musicFade.gain.value, now);
+      this.musicFade.gain.linearRampToValueAtTime(0.0001, now + 0.3);
+    }
+  }
+
+  public getMusicTheme(): MusicTheme | null {
+    return this.pendingTheme ?? this.musicTheme;
+  }
+
+  private ensureMusicPump(): void {
+    if (this.musicTimer !== null || typeof window === 'undefined') return;
+    this.musicTimer = window.setInterval(() => this.pumpMusic(), 200);
+  }
+
+  private pumpMusic(): void {
+    const ctx = this.ctx;
+    if (!ctx || ctx.state !== 'running' || !this.musicTheme) return;
+
+    if (this.pendingTheme) {
+      if (ctx.currentTime >= this.pendingThemeAt) {
+        this.musicTheme = this.pendingTheme;
+        this.pendingTheme = null;
+        this.barCount = 0;
+        this.nextBarAt = ctx.currentTime + 0.05;
+        if (this.musicFade) {
+          const now = ctx.currentTime;
+          this.musicFade.gain.cancelScheduledValues(now);
+          this.musicFade.gain.setValueAtTime(Math.max(0.0001, this.musicFade.gain.value), now);
+          this.musicFade.gain.linearRampToValueAtTime(1, now + 0.7);
+        }
+      } else {
+        return; // still fading out — schedule nothing new
+      }
+    }
+
+    if (this.nextBarAt === 0) {
+      this.nextBarAt = ctx.currentTime + 0.06;
+      if (this.musicFade) this.musicFade.gain.value = 1;
+    }
+    const def = MUSIC_THEMES[this.musicTheme];
+    while (this.nextBarAt < ctx.currentTime + 1.0) {
+      this.scheduleBar(this.musicTheme, this.barCount, this.nextBarAt);
+      this.nextBarAt += def.barSeconds;
+      this.barCount += 1;
+    }
+  }
+
+  private scheduleBar(theme: MusicTheme, barIndex: number, startAt: number): void {
+    const ctx = this.ctx;
+    if (!ctx || !this.musicFade) return;
+    const def = MUSIC_THEMES[theme];
+    const chord = def.chords[barIndex % def.chords.length];
+    const bar = def.barSeconds;
+
+    // Pad: one soft oscillator per chord tone, slow attack, tail past the bar.
+    for (const midi of chord) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.value = midiToFreq(midi);
+      gain.gain.setValueAtTime(0.0001, startAt);
+      gain.gain.linearRampToValueAtTime(def.padGain, startAt + Math.min(1.1, bar * 0.3));
+      gain.gain.setValueAtTime(def.padGain, startAt + bar * 0.72);
+      gain.gain.linearRampToValueAtTime(0.0001, startAt + bar + 0.5);
+      osc.connect(gain);
+      gain.connect(this.musicFade);
+      osc.start(startAt);
+      osc.stop(startAt + bar + 0.55);
+    }
+
+    const slotDur = bar / def.slotsPerBar;
+    for (let slot = 0; slot < def.slotsPerBar; slot++) {
+      const slotAt = startAt + slot * slotDur;
+      if (def.pulse) {
+        // Driving root pulse (boss themes).
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.value = midiToFreq(chord[0]);
+        gain.gain.setValueAtTime(0.0001, slotAt);
+        gain.gain.linearRampToValueAtTime(0.055, slotAt + 0.015);
+        gain.gain.exponentialRampToValueAtTime(0.0001, slotAt + Math.min(0.2, slotDur * 0.9));
+        osc.connect(gain);
+        gain.connect(this.musicFade);
+        osc.start(slotAt);
+        osc.stop(slotAt + Math.min(0.22, slotDur));
+      }
+      // Sparse generative melody: a lazy random walk over the pentatonic pool.
+      if (Math.random() < def.melodyChance) {
+        const step = Math.random() < 0.6 ? (Math.random() < 0.5 ? -1 : 1) : Math.random() < 0.5 ? -2 : 2;
+        this.melodyCursor = Math.min(
+          def.melodyPool.length - 1,
+          Math.max(0, this.melodyCursor + step)
+        );
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = midiToFreq(def.melodyPool[this.melodyCursor]);
+        gain.gain.setValueAtTime(0.0001, slotAt);
+        gain.gain.linearRampToValueAtTime(def.melodyGain, slotAt + 0.03);
+        gain.gain.exponentialRampToValueAtTime(0.0001, slotAt + slotDur * 1.7);
+        osc.connect(gain);
+        gain.connect(this.musicFade);
+        osc.start(slotAt);
+        osc.stop(slotAt + slotDur * 1.75);
+      }
+    }
+  }
+
+  // ------------------------------------------------------------------ sfx
 
   private tone(
     freq: number,
@@ -57,7 +362,7 @@ class SoundEngine {
     gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
 
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(this.sfxBus ?? ctx.destination);
     osc.start(now);
     osc.stop(now + duration + 0.01);
   }
