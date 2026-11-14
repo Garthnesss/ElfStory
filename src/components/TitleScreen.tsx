@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { User } from 'firebase/auth';
-import { SlidersHorizontal, Trash2, Trophy } from 'lucide-react';
+import { ScrollText, SlidersHorizontal, Trash2, Trophy } from 'lucide-react';
 import { CloudSaveSummary, SAVE_SLOTS } from '../game/cloudSave';
+import { DIFFICULTY_INFO, DIFFICULTY_ORDER, DifficultyTier } from '../game/difficulty';
+import { SlotIssue } from '../game/saveSlots';
 import { PlayerState, SaveSlotId } from '../game/types';
 import titleBackdrop from '../assets/images/title_crypt_backdrop_1794536484639.jpg';
 
@@ -13,6 +15,10 @@ export interface LocalSlotSummary {
   buildTitle: string;
   kills: number;
   updatedAtMs?: number;
+  /** Phase 4: set when the run has reached the ending (completion stamp). */
+  completedAtMs?: number;
+  /** Phase 4: the run's difficulty tier. */
+  difficulty?: DifficultyTier;
 }
 
 interface TitleScreenProps {
@@ -20,18 +26,27 @@ interface TitleScreenProps {
   onSelectSlot: (slotId: SaveSlotId) => void;
   localSlots: Partial<Record<SaveSlotId, LocalSlotSummary>>;
   cloudSlots: Partial<Record<SaveSlotId, CloudSaveSummary>>;
+  /** Phase 4: slots whose local save exists but cannot be loaded
+   *  (corrupt JSON or a newer save format). Rendered in place of a
+   *  summary; the slot's delete action still works. */
+  slotIssues?: Partial<Record<SaveSlotId, SlotIssue>>;
   chronicleCount: number;
   authUser: User | null;
   authBusy: boolean;
   authError: string | null;
   onSignIn: () => void;
   onSignOut: () => void;
-  onStartNew: (starterClass: PlayerState['starterClass'], slotId: SaveSlotId) => void;
+  onStartNew: (
+    starterClass: PlayerState['starterClass'],
+    slotId: SaveSlotId,
+    difficulty: DifficultyTier
+  ) => void;
   onContinueLocal: (slotId: SaveSlotId) => void;
   onContinueCloud: (slotId: SaveSlotId) => void;
   onDeleteSlot: (slotId: SaveSlotId) => void;
   onOpenHallOfFame: () => void;
   onOpenSettings: () => void;
+  onOpenCredits: () => void;
   blockKeys?: boolean;
 }
 
@@ -88,6 +103,7 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
   onSelectSlot,
   localSlots,
   cloudSlots,
+  slotIssues,
   chronicleCount,
   authUser,
   authBusy,
@@ -100,9 +116,11 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
   onDeleteSlot,
   onOpenHallOfFame,
   onOpenSettings,
+  onOpenCredits,
   blockKeys = false,
 }) => {
   const [selectedClass, setSelectedClass] = useState<PlayerState['starterClass']>('Vanguard');
+  const [selectedDifficulty, setSelectedDifficulty] = useState<DifficultyTier>('standard');
   const [imgError, setImgError] = useState(false);
 
   const selectedCloud = cloudSlots[activeSlot];
@@ -158,6 +176,15 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
             >
               <SlidersHorizontal className="w-3.5 h-3.5" />
               <span>Settings</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={onOpenCredits}
+              className="min-h-[44px] px-3 py-1.5 rounded border border-white/15 bg-[#11151E]/90 hover:border-amber-400/50 text-[#ECE4D4] font-medium flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+            >
+              <ScrollText className="w-3.5 h-3.5" />
+              <span>Credits</span>
             </button>
 
             {authUser ? (
@@ -269,13 +296,42 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
               </div>
             </div>
 
+            {/* Difficulty Selector (Phase 4) */}
+            <div className="space-y-2">
+              <div className="text-xs font-medium text-amber-200/80">Difficulty</div>
+              <div className="grid grid-cols-3 gap-2.5 max-w-lg">
+                {DIFFICULTY_ORDER.map((tier) => {
+                  const active = selectedDifficulty === tier;
+                  return (
+                    <button
+                      key={tier}
+                      type="button"
+                      onClick={() => setSelectedDifficulty(tier)}
+                      aria-pressed={active}
+                      className={`min-h-[44px] px-3 py-2 rounded border text-sm font-semibold transition-colors cursor-pointer ${
+                        active
+                          ? 'border-amber-400/70 bg-amber-500/12 text-[#FDF6E3]'
+                          : 'border-white/10 bg-[#11151E]/80 text-slate-300 hover:border-white/25'
+                      }`}
+                    >
+                      {DIFFICULTY_INFO[tier].label}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="max-w-lg text-[11px] text-slate-400 leading-snug">
+                {DIFFICULTY_INFO[selectedDifficulty].blurb} Changeable later in Settings — a
+                change applies to newly encountered foes, not ones already spawned.
+              </div>
+            </div>
+
             {authError && <div className="text-xs text-rose-300">{authError}</div>}
 
             {/* Primary CTAs */}
             <div className="flex flex-wrap items-center gap-3 pt-1">
               <button
                 type="button"
-                onClick={() => onStartNew(selectedClass, activeSlot)}
+                onClick={() => onStartNew(selectedClass, activeSlot, selectedDifficulty)}
                 className="min-h-[44px] px-6 py-2.5 rounded bg-amber-500 hover:bg-amber-400 text-[#0B0D12] font-semibold text-sm transition-colors cursor-pointer whitespace-nowrap shrink-0"
               >
                 {selectedLocal || selectedCloud
@@ -322,6 +378,10 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
                 const local = localSlots[slotId];
                 const primary = cloud ?? local;
                 const isSelected = activeSlot === slotId;
+                // Phase 4: a local save that exists but cannot be loaded
+                // (corrupt / newer format) shows its issue in place of a
+                // summary — unless a loadable local or cloud save exists.
+                const issue = !local ? slotIssues?.[slotId] : undefined;
 
                 return (
                   <div
@@ -342,8 +402,17 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
                           <span className="text-sm font-semibold text-[#ECE4D4] truncate">
                             {primary.buildTitle}
                           </span>
+                        ) : issue ? (
+                          <span className="text-xs font-semibold text-rose-300">
+                            {issue.kind === 'corrupt' ? 'Save Corrupted' : 'Newer Save Format'}
+                          </span>
                         ) : (
                           <span className="text-xs text-slate-500">Empty Slot</span>
+                        )}
+                        {primary?.completedAtMs != null && (
+                          <span className="shrink-0 text-[11px] font-semibold text-amber-300">
+                            ✦ Completed
+                          </span>
                         )}
                       </div>
 
@@ -372,7 +441,19 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
                             Local
                           </button>
                         )}
-                        {(local || cloud) && (
+                        {issue && !local && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onContinueLocal(slotId);
+                            }}
+                            className="min-h-[44px] px-3 py-1 rounded text-xs font-medium border border-rose-400/40 bg-rose-500/10 hover:bg-rose-500/20 text-rose-200 cursor-pointer"
+                          >
+                            Load
+                          </button>
+                        )}
+                        {(local || cloud || issue) && (
                           <button
                             type="button"
                             aria-label={`Delete ${SLOT_LABELS[slotId]}`}
@@ -391,6 +472,14 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
                     {primary && (
                       <div className="text-[11px] font-mono-glyph text-slate-400 mt-1 truncate tabular-nums">
                         Lv {primary.level} · {primary.starterClass} · {primary.zoneName} · {primary.kills} Slain
+                        {local && primary === local && local.difficulty
+                          ? ` · ${DIFFICULTY_INFO[local.difficulty].label}`
+                          : ''}
+                      </div>
+                    )}
+                    {issue && !primary && (
+                      <div className="text-[11px] text-rose-200/80 mt-1 leading-snug">
+                        {issue.message}
                       </div>
                     )}
                   </div>

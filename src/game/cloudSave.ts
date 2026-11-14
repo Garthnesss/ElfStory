@@ -24,6 +24,7 @@ import {
   where,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
+import { DifficultyTier } from './difficulty';
 import {
   ChronicleEntry,
   Item,
@@ -96,6 +97,12 @@ export interface CloudSavePayload {
   quests: Record<string, QuestProgress>;
   merchantStocks: Record<string, Item[]>;
   logs: LogEntry[];
+  /** Phase 4: save format version (see saveSlots.ts SAVE_VERSION). */
+  version?: number;
+  /** Phase 4: per-run difficulty tier ('story' | 'standard' | 'hardened'). */
+  difficulty?: DifficultyTier;
+  /** Phase 4: epoch ms of first ending completion, once stamped. */
+  completedAtMs?: number;
 }
 
 export interface CloudSaveSummary {
@@ -108,6 +115,8 @@ export interface CloudSaveSummary {
   kills: number;
   gold: number;
   updatedAtMs?: number;
+  /** Phase 4: set when the run has reached the ending (completion stamp). */
+  completedAtMs?: number;
 }
 
 export interface CloudSlotRecord {
@@ -307,6 +316,11 @@ function sanitizeForBlueprint(
       quests: payload.quests,
       merchantStocks: payload.merchantStocks,
       logs: payload.logs.slice(0, 25),
+      // Phase 4 fields ride along (stripUndefined drops them for legacy
+      // payloads that don't carry them yet).
+      version: payload.version,
+      difficulty: payload.difficulty,
+      completedAtMs: payload.completedAtMs,
     }),
   };
 }
@@ -416,6 +430,8 @@ async function readSingleSlot(
         kills: data.kills,
         gold: data.gold,
         updatedAtMs: updatedAt?.toMillis ? updatedAt.toMillis() : undefined,
+        completedAtMs:
+          typeof rawPayload.completedAtMs === 'number' ? rawPayload.completedAtMs : undefined,
       },
       payload: {
         ...(rawPayload as unknown as Omit<CloudSavePayload, 'zones'>),

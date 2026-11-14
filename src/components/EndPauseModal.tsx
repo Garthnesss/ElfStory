@@ -7,6 +7,9 @@ interface EndPauseModalProps {
   activeSlot: SaveSlotId;
   player: PlayerState;
   derived: DerivedStats;
+  /** Phase 4: current run difficulty label (e.g. 'Standard'), shown in the
+   *  stats grid so the tier is visible without opening Settings. */
+  difficultyLabel?: string;
   authUser: User | null;
   cloudBusy: boolean;
   onSignIn: () => void;
@@ -30,6 +33,7 @@ export const EndPauseModal: React.FC<EndPauseModalProps> = ({
   activeSlot,
   player,
   derived,
+  difficultyLabel,
   authUser,
   cloudBusy,
   onSignIn,
@@ -106,6 +110,12 @@ export const EndPauseModal: React.FC<EndPauseModalProps> = ({
             <div className="text-slate-400">Turns Taken</div>
             <div className="text-[#ECE4D4] font-semibold mt-0.5">{player.turnsElapsed}</div>
           </div>
+          {difficultyLabel && (
+            <div>
+              <div className="text-slate-400">Difficulty</div>
+              <div className="text-[#ECE4D4] font-semibold mt-0.5">{difficultyLabel}</div>
+            </div>
+          )}
         </div>
 
         <div className="flex flex-col gap-2.5">

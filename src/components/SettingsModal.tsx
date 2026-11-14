@@ -1,6 +1,16 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Volume2, VolumeX, X } from 'lucide-react';
-import { GameSettings, TILE_SIZE_STEPS } from '../game/settings';
+import { DIFFICULTY_INFO, DIFFICULTY_ORDER, DifficultyTier } from '../game/difficulty';
+import {
+  DEFAULT_KEYMAP,
+  GameSettings,
+  KEY_ACTIONS,
+  KEY_ACTION_LABELS,
+  KeyAction,
+  TILE_SIZE_STEPS,
+  formatKeyLabel,
+  rebindKeymap,
+} from '../game/settings';
 
 interface SettingsModalProps {
   settings: GameSettings;
@@ -8,6 +18,11 @@ interface SettingsModalProps {
   onSettingsChange: (patch: Partial<GameSettings>) => void;
   onTileSizeChange: (tileSize: number) => void;
   onClose: () => void;
+  /** Phase 4: the active run's difficulty tier. Only passed when a run is
+   *  in progress (from the Title Screen, difficulty is picked on the New
+   *  Adventure flow instead). */
+  difficulty?: DifficultyTier;
+  onDifficultyChange?: (tier: DifficultyTier) => void;
 }
 
 const TILE_LABELS: Record<number, string> = {
@@ -87,7 +102,30 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onSettingsChange,
   onTileSizeChange,
   onClose,
+  difficulty,
+  onDifficultyChange,
 }) => {
+  // Key-capture state for rebinding: the action currently waiting for a
+  // keypress, or null. Escape cancels; a key already bound elsewhere swaps.
+  const [capturing, setCapturing] = useState<KeyAction | null>(null);
+
+  useEffect(() => {
+    if (!capturing) return;
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === 'Escape') {
+        setCapturing(null);
+        return;
+      }
+      const next = rebindKeymap(settings.keymap, capturing, e.key);
+      if (next !== settings.keymap) onSettingsChange({ keymap: next });
+      setCapturing(null);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [capturing, settings.keymap, onSettingsChange]);
+
   return (
     <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-3 sm:p-6">
       <div className="w-full max-w-md rounded-md border border-amber-500/30 bg-[#10141D] p-5 sm:p-6 shadow-2xl space-y-5 max-h-[90dvh] overflow-y-auto rpg-scroll">
@@ -166,6 +204,82 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </button>
             ))}
           </div>
+        </section>
+
+        {difficulty && onDifficultyChange && (
+          <section className="space-y-2">
+            <div className="text-xs font-medium text-slate-300">Difficulty</div>
+            <div className="grid grid-cols-3 gap-2">
+              {DIFFICULTY_ORDER.map((tier) => (
+                <button
+                  key={tier}
+                  type="button"
+                  onClick={() => onDifficultyChange(tier)}
+                  aria-pressed={difficulty === tier}
+                  className={`min-h-[44px] py-2 rounded border text-xs font-semibold cursor-pointer ${
+                    difficulty === tier
+                      ? 'border-amber-400/60 bg-amber-500/20 text-amber-200'
+                      : 'border-white/12 bg-[#141923] text-slate-300 hover:border-amber-400/40'
+                  }`}
+                >
+                  {DIFFICULTY_INFO[tier].label}
+                </button>
+              ))}
+            </div>
+            <p className="text-[11px] text-slate-500 leading-snug">
+              {DIFFICULTY_INFO[difficulty].blurb} A change applies to newly encountered
+              enemies and unexplored floors — enemies already spawned keep their stats.
+            </p>
+          </section>
+        )}
+
+        <section className="space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="text-xs font-medium text-slate-300">Keyboard Controls</div>
+            <button
+              type="button"
+              onClick={() => {
+                setCapturing(null);
+                onSettingsChange({ keymap: { ...DEFAULT_KEYMAP } });
+              }}
+              className="min-h-[44px] px-2 text-[11px] font-medium text-amber-300 hover:text-amber-200 underline underline-offset-4 cursor-pointer"
+            >
+              Reset Defaults
+            </button>
+          </div>
+          <div className="space-y-1.5">
+            {KEY_ACTIONS.map((action) => {
+              const isCapturing = capturing === action;
+              return (
+                <button
+                  key={action}
+                  type="button"
+                  onClick={() => setCapturing(isCapturing ? null : action)}
+                  className={`w-full min-h-[44px] flex items-center justify-between gap-3 px-3 py-2 rounded border cursor-pointer text-left ${
+                    isCapturing
+                      ? 'border-amber-400/70 bg-amber-500/15'
+                      : 'border-white/10 bg-[#141923] hover:border-amber-400/40'
+                  }`}
+                >
+                  <span className="text-xs font-medium text-[#ECE4D4]">
+                    {KEY_ACTION_LABELS[action]}
+                  </span>
+                  <span
+                    className={`shrink-0 px-2 py-0.5 rounded text-[11px] font-mono-glyph font-semibold ${
+                      isCapturing ? 'bg-amber-500/30 text-amber-100' : 'bg-white/8 text-amber-200'
+                    }`}
+                  >
+                    {isCapturing ? 'Press a key…' : formatKeyLabel(settings.keymap[action])}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-[11px] text-slate-500 leading-snug">
+            Click a row, then press the new key. If that key is already bound to another
+            action, the two bindings swap. Escape cancels. Arrow keys always move, Enter
+            always interacts, and the number row (skills &amp; runes) stays fixed.
+          </p>
         </section>
       </div>
     </div>

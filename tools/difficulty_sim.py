@@ -116,3 +116,19 @@ for arch, depths in [('grave_husk',[2,3,6,10]), ('spore_hulk',[3,4,6,10]), ('rim
 
 print(f"\nCompanion (lynx): L5 maxHP {comp_maxhp(5)}, L8 {comp_maxhp(8)}, L12 {comp_maxhp(12)}, L20 {comp_maxhp(20)}; dmg/hit at L8 vs def 6: {comp_dmg(8,6):.0f}")
 print(f"Potion at maxHp 194: heals {max(24, round(194*0.35))} HP (was flat 24); at maxHp 61: {max(24, round(61*0.35))}")
+
+# --- Phase 4 difficulty tiers -------------------------------------------------
+# Multipliers parsed from src/game/difficulty.ts. Everything above is the
+# Standard tier (all multipliers 1.0, i.e. the P1 numbers unchanged); this
+# section only ADDS the Story/Hardened headline numbers.
+D = open('src/game/difficulty.ts').read()
+TIERS = {name: (float(hp), float(atk), float(xp)) for name, hp, atk, xp in
+         re.findall(r"(\w+): \{ enemyHp: ([\d.]+), enemyAtk: ([\d.]+), xp: ([\d.]+) \}", D)}
+print(f"\nDifficulty tiers (Phase 4, parsed from difficulty.ts): {TIERS}")
+m_hp, m_atk, m_def, m_xp = BOSSES['Malakor F5']
+mp = player_at(13, 5)
+m_dmg = exp_dmg(mp['atk'], mp['crit'], m_def)
+for tier in ['story', 'hardened']:
+    ehp, eatk, expm = TIERS[tier]
+    s_hp, s_atk = round(m_hp * ehp), round(m_atk * eatk)
+    print(f"  {tier.capitalize():>8}: Malakor HP {s_hp} ATK {s_atk} DEF {m_def} | player L13 dmg/hit {m_dmg:.0f} TTK {s_hp/m_dmg:.1f} | XP reward {round(m_xp*expm)} (x{expm}) | boss basic {max(1,s_atk-round(mp['def_']*0.65))}/hit vs player HP {mp['maxhp']}")

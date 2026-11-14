@@ -9,6 +9,8 @@ interface EndingScreenProps {
   playTimeMs?: number | null;
   onContinueAbyss: () => void;
   onOpenHallOfFame: () => void;
+  /** Phase 4: open the credits roll (optional so older callers still work). */
+  onShowCredits?: () => void;
   onPlayAgain: () => void;
   onReturnToTitle: () => void;
 }
@@ -77,6 +79,7 @@ export const EndingScreen: React.FC<EndingScreenProps> = ({
   playTimeMs,
   onContinueAbyss,
   onOpenHallOfFame,
+  onShowCredits,
   onPlayAgain,
   onReturnToTitle,
 }) => {
@@ -133,6 +136,15 @@ export const EndingScreen: React.FC<EndingScreenProps> = ({
           >
             Hall of Fame Chronicle
           </button>
+          {onShowCredits && (
+            <button
+              type="button"
+              onClick={onShowCredits}
+              className="min-h-[44px] w-full py-2.5 rounded border border-white/12 bg-[#141923] hover:bg-white/8 text-slate-300 font-medium text-sm cursor-pointer"
+            >
+              Credits
+            </button>
+          )}
           <button
             type="button"
             onClick={onPlayAgain}

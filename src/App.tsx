@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActionDock } from './components/ActionDock';
 import { AsciiCanvas } from './components/AsciiCanvas';
 import { CharacterSkillsModal } from './components/CharacterSkillsModal';
+import { CreditsScreen } from './components/CreditsScreen';
 import { DialogueModal } from './components/DialogueModal';
 import { EndPauseModal } from './components/EndPauseModal';
 import { EndingScreen } from './components/EndingScreen';
@@ -22,11 +23,31 @@ import { TownUpgradesModal } from './components/TownUpgradesModal';
 import { TravelModal } from './components/TravelModal';
 import { resolveMusicTheme, soundEngine } from './game/audio';
 import {
+  DIFFICULTY_INFO,
+  DifficultyTier,
+  normalizeDifficulty,
+  scaleXpForDifficulty,
+  setCurrentDifficulty,
+} from './game/difficulty';
+import {
+  LEGACY_SAVE_KEY,
+  SAVE_VERSION,
+  SavedBundle,
+  SlotIssue,
+  bundleDifficulty,
+  corruptSlotMessage,
+  getLocalSlotKey,
+  parseStoredBundle,
+  readAllSlotStates,
+  stampBundle,
+} from './game/saveSlots';
+import {
   GameSettings,
   isTutorialDone,
   loadSettings,
   loadTileSize,
   markTutorialDone,
+  resolveKeyAction,
   saveSettings,
   saveTileSize,
 } from './game/settings';
@@ -127,24 +148,11 @@ import {
 import { pickAmbientBark, pickDungeonAmbience, stepCritters, stepNpcWander } from './game/ambient';
 import { createInitialZones, generateDungeonFloor, generateZoneById, getZoneContext } from './game/world';
 
-const LEGACY_SAVE_KEY = 'ashen_glyph_save_v1';
-const SLOT_KEY_PREFIX = 'ashen_glyph_save_v2_';
 const CHRONICLES_KEY = 'ashen_glyph_chronicles_v1';
 
-interface SavedBundle {
-  player: PlayerState;
-  zones: Record<ZoneId, ZoneMap>;
-  currentZoneId: ZoneId;
-  worldFlags: WorldFlags;
-  quests: Record<string, QuestProgress>;
-  merchantStocks: Record<string, Item[]>;
-  logs: LogEntry[];
-  updatedAtMs?: number;
-}
-
-function getLocalSlotKey(slotId: SaveSlotId): string {
-  return `${SLOT_KEY_PREFIX}${slotId}`;
-}
+// SavedBundle, slot keys, SAVE_VERSION stamping and the per-slot read
+// results live in game/saveSlots.ts (Phase 4) so the versioning and
+// corruption-isolation logic is unit-testable without a DOM.
 
 function formatCloudError(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err ?? 'network error');
@@ -166,55 +174,59 @@ function hydrateSavedBundle(rawBundle: SavedBundle): SavedBundle {
   };
 }
 
-function readAllLocalSlots(): Partial<
-  Record<SaveSlotId, { summary: LocalSlotSummary; bundle: SavedBundle }>
-> {
-  const out: Partial<Record<SaveSlotId, { summary: LocalSlotSummary; bundle: SavedBundle }>> = {};
-  try {
-    for (const slotId of SAVE_SLOTS) {
-      const raw = localStorage.getItem(getLocalSlotKey(slotId));
-      if (!raw) continue;
-      const parsed = JSON.parse(raw) as SavedBundle;
-      if (!parsed?.player) continue;
-      const bundle = hydrateSavedBundle(parsed);
-      const bTitle = computeDerivedStats(bundle.player, bundle.worldFlags).buildTitle;
-      out[slotId] = {
-        summary: {
-          slotId,
-          starterClass: bundle.player.starterClass,
-          level: bundle.player.level,
-          zoneName: bundle.zones[bundle.currentZoneId]?.name ?? 'Oakhaven Outpost',
-          buildTitle: bTitle,
-          kills: bundle.player.kills,
-          updatedAtMs: bundle.updatedAtMs,
-        },
-        bundle,
-      };
-    }
-    if (!out.slot_1) {
-      const legacy = localStorage.getItem(LEGACY_SAVE_KEY);
-      if (legacy) {
-        const parsed = JSON.parse(legacy) as SavedBundle;
-        if (parsed?.player) {
-          const bundle = hydrateSavedBundle(parsed);
-          out.slot_1 = {
-            summary: {
-              slotId: 'slot_1',
-              starterClass: bundle.player.starterClass,
-              level: bundle.player.level,
-              zoneName: bundle.zones[bundle.currentZoneId]?.name ?? 'Oakhaven Outpost',
-              buildTitle: computeDerivedStats(bundle.player, bundle.worldFlags).buildTitle,
-              kills: bundle.player.kills,
-            },
-            bundle,
-          };
-        }
+function makeLocalSummary(slotId: SaveSlotId, bundle: SavedBundle): LocalSlotSummary {
+  return {
+    slotId,
+    starterClass: bundle.player.starterClass,
+    level: bundle.player.level,
+    zoneName: bundle.zones[bundle.currentZoneId]?.name ?? 'Oakhaven Outpost',
+    buildTitle: computeDerivedStats(bundle.player, bundle.worldFlags).buildTitle,
+    kills: bundle.player.kills,
+    updatedAtMs: bundle.updatedAtMs,
+    completedAtMs: bundle.completedAtMs,
+    difficulty: bundleDifficulty(bundle),
+  };
+}
+
+/**
+ * Phase 4 slot scan: every slot is read and hydrated INDEPENDENTLY (via
+ * saveSlots' per-slot read results), so a corrupt or future-version bundle
+ * in one slot surfaces as a SlotIssue for that slot only — the Title
+ * Screen list and the other slots keep working, and the bad slot can
+ * still be deleted.
+ */
+function scanLocalSlots(): {
+  map: Partial<Record<SaveSlotId, { summary: LocalSlotSummary; bundle: SavedBundle }>>;
+  issues: Partial<Record<SaveSlotId, SlotIssue>>;
+} {
+  const map: Partial<Record<SaveSlotId, { summary: LocalSlotSummary; bundle: SavedBundle }>> = {};
+  const issues: Partial<Record<SaveSlotId, SlotIssue>> = {};
+  const states = readAllSlotStates();
+  for (const slotId of SAVE_SLOTS) {
+    const state = states[slotId];
+    if (state.status === 'ok') {
+      try {
+        const bundle = hydrateSavedBundle(state.bundle);
+        map[slotId] = { summary: makeLocalSummary(slotId, bundle), bundle };
+      } catch {
+        issues[slotId] = { kind: 'corrupt', message: corruptSlotMessage() };
       }
+    } else if (state.status === 'corrupt' || state.status === 'future-version') {
+      issues[slotId] = { kind: state.status, message: state.message };
     }
-  } catch {
-    // Ignore malformed local storage
   }
-  return out;
+  if (!map.slot_1 && !issues.slot_1) {
+    try {
+      const legacy = parseStoredBundle(localStorage.getItem(LEGACY_SAVE_KEY));
+      if (legacy.status === 'ok') {
+        const bundle = hydrateSavedBundle(legacy.bundle);
+        map.slot_1 = { summary: makeLocalSummary('slot_1', bundle), bundle };
+      }
+    } catch {
+      // Ignore malformed legacy storage
+    }
+  }
+  return { map, issues };
 }
 
 function readLocalChronicles(): ChronicleEntry[] {
@@ -406,6 +418,7 @@ export default function App() {
   }, []);
 
   const [showSettings, setShowSettings] = useState(false);
+  const [showCredits, setShowCredits] = useState(false);
 
   // First-run tutorial (Phase 2): current step index, or null when inactive.
   const [tutorialStepIdx, setTutorialStepIdx] = useState<number | null>(null);
@@ -450,7 +463,31 @@ export default function App() {
   const [shakeUntil, setShakeUntil] = useState(0);
 
   const [activeSlot, setActiveSlot] = useState<SaveSlotId>('slot_1');
-  const [localSlotMap, setLocalSlotMap] = useState(() => readAllLocalSlots());
+  const [initialSlotScan] = useState(scanLocalSlots);
+  const [localSlotMap, setLocalSlotMap] = useState(initialSlotScan.map);
+  const [slotIssues, setSlotIssues] = useState<Partial<Record<SaveSlotId, SlotIssue>>>(
+    initialSlotScan.issues
+  );
+
+  // Phase 4 difficulty: per-run tier (persisted in the save bundle, NOT in
+  // the settings blob). The ref + difficulty module mirror exists because
+  // grantXpAndCheckLevel and world.ts zone generation read it outside
+  // React state. applyDifficulty is the single write path.
+  const [difficulty, setDifficulty] = useState<DifficultyTier>('standard');
+  const difficultyRef = useRef<DifficultyTier>('standard');
+  const applyDifficulty = useCallback((tier: DifficultyTier) => {
+    difficultyRef.current = tier;
+    setCurrentDifficulty(tier);
+    setDifficulty(tier);
+  }, []);
+
+  // Phase 4 completion stamp: epoch ms of this run's first ending, or null.
+  const [completedAtMs, setCompletedAtMs] = useState<number | null>(null);
+  const completedAtMsRef = useRef<number | null>(null);
+  const updateCompletedAtMs = useCallback((value: number | null) => {
+    completedAtMsRef.current = value;
+    setCompletedAtMs(value);
+  }, []);
   const [cloudSlotMap, setCloudSlotMap] = useState<
     Partial<Record<SaveSlotId, { summary: CloudSaveSummary; payload: CloudSavePayload }>>
   >({});
@@ -659,6 +696,21 @@ export default function App() {
     ]);
   }, [player.turnsElapsed]);
 
+  // Phase 4: mid-run difficulty change from the Settings modal. Only
+  // enemies spawned after the change use the new tier — zones already
+  // generated keep their enemies' stats (called out in the modal copy).
+  const handleDifficultyChange = useCallback(
+    (tier: DifficultyTier) => {
+      if (tier === difficultyRef.current) return;
+      applyDifficulty(tier);
+      pushLog(
+        `Difficulty set to ${DIFFICULTY_INFO[tier].label}. Foes you meet from here on use the new tuning; foes already spawned keep their stats.`,
+        'quest'
+      );
+    },
+    [applyDifficulty, pushLog]
+  );
+
   const spawnFloating = useCallback((x: number, y: number, text: string, color: string) => {
     const now = performance.now();
     setFloatingEffects((prev) => [
@@ -815,7 +867,15 @@ export default function App() {
       skipCloud = false
     ) => {
       const targetSlot = slotOverride ?? activeSlot;
-      const stamped: SavedBundle = { ...bundle, updatedAtMs: Date.now() };
+      // Phase 4: every persisted bundle carries the format version, the
+      // run's difficulty tier, and its completion stamp (fields already on
+      // the bundle win; otherwise the live run's values fill in).
+      const stamped: SavedBundle = {
+        ...stampBundle(bundle),
+        difficulty: bundle.difficulty ?? difficultyRef.current,
+        completedAtMs: bundle.completedAtMs ?? completedAtMsRef.current ?? undefined,
+        updatedAtMs: Date.now(),
+      };
       const compactForLocal = {
         ...stamped,
         zones: packZones(stamped.zones),
@@ -837,10 +897,20 @@ export default function App() {
               buildTitle: bTitle,
               kills: bundle.player.kills,
               updatedAtMs: stamped.updatedAtMs,
+              completedAtMs: stamped.completedAtMs,
+              difficulty: stamped.difficulty,
             },
             bundle: stamped,
           },
         }));
+        // A successful write heals any corruption/future-version issue
+        // recorded for this slot.
+        setSlotIssues((prev) => {
+          if (!prev[targetSlot]) return prev;
+          const next = { ...prev };
+          delete next[targetSlot];
+          return next;
+        });
       } catch {
         localSaved = false;
         pushLog(
@@ -850,7 +920,7 @@ export default function App() {
         );
       }
       if (authUser && !skipCloud) {
-        saveSlotToCloud(authUser.uid, targetSlot, bundle, bTitle)
+        saveSlotToCloud(authUser.uid, targetSlot, stamped, bTitle)
           .then(() => {
             setCloudSlotMap((prev) => ({
               ...prev,
@@ -865,8 +935,9 @@ export default function App() {
                   kills: bundle.player.kills,
                   gold: bundle.player.gold,
                   updatedAtMs: Date.now(),
+                  completedAtMs: stamped.completedAtMs,
                 },
-                payload: bundle,
+                payload: stamped,
               },
             }));
           })
@@ -957,6 +1028,37 @@ export default function App() {
   }, [activeSlot, saveBundleToStorage]);
   // --- End autosave --------------------------------------------------------
 
+  // --- Completion stamp (P4) ----------------------------------------------
+  // The first time a run reaches the ending (gameState VICTORY), stamp
+  // completedAtMs onto the active save and persist immediately, so the
+  // Title Screen can mark the slot ✦ Completed. The stamp then rides every
+  // later save via saveBundleToStorage's ref defaulting — continuing into
+  // the Endless Abyss keeps it, and updateCompletedAtMs here only ever
+  // fires once per run (guarded by the ref).
+  useEffect(() => {
+    if (gameState !== 'VICTORY') return;
+    if (completedAtMsRef.current !== null) return;
+    updateCompletedAtMs(Date.now());
+    saveBundleToStorage(
+      { player, zones, currentZoneId, worldFlags, quests, merchantStocks, logs },
+      undefined,
+      activeSlot
+    );
+  }, [
+    gameState,
+    player,
+    zones,
+    currentZoneId,
+    worldFlags,
+    quests,
+    merchantStocks,
+    logs,
+    activeSlot,
+    saveBundleToStorage,
+    updateCompletedAtMs,
+  ]);
+  // --- End completion stamp -------------------------------------------------
+
   const handleSignInGoogle = useCallback(async () => {
     setAuthBusy(true);
     setAuthError(null);
@@ -984,7 +1086,11 @@ export default function App() {
   }, []);
 
   const handleStartNew = useCallback(
-    (starterClass: PlayerState['starterClass'], slotOverride?: SaveSlotId) => {
+    (
+      starterClass: PlayerState['starterClass'],
+      slotOverride?: SaveSlotId,
+      difficultyChoice?: DifficultyTier
+    ) => {
       // Destructive-action guard: starting fresh over an occupied slot
       // (from the Title Screen's New Adventure, or Play Again on the
       // game-over / victory screens, which routes through here) discards
@@ -1000,6 +1106,11 @@ export default function App() {
       if (slotOverride) setActiveSlot(slotOverride);
       recordedVictoryRef.current = false;
       recordedFallenRef.current = false;
+      // Phase 4: the New Adventure difficulty choice becomes the run's
+      // tier BEFORE any zone is generated; Play Again (no choice passed)
+      // keeps the current run's tier. A fresh run has no completion stamp.
+      applyDifficulty(difficultyChoice ?? difficultyRef.current);
+      updateCompletedAtMs(null);
       const freshZones = createInitialZones();
       const freshPlayer = createInitialPlayer(starterClass);
       const initialFlags = createInitialFlags();
@@ -1051,13 +1162,17 @@ export default function App() {
       setTutorialStepIdx(isTutorialDone() ? null : 0);
       setGameState('PLAYING');
     },
-    [activeSlot, cloudSlotMap, localSlotMap]
+    [activeSlot, applyDifficulty, cloudSlotMap, localSlotMap, updateCompletedAtMs]
   );
 
   const applySavedBundle = useCallback((data: SavedBundle, slotId: SaveSlotId) => {
     setActiveSlot(slotId);
     recordedVictoryRef.current = Boolean(data.worldFlags?.malakorDefeated);
     recordedFallenRef.current = false;
+    // Phase 4: restore the run's difficulty tier (legacy bundles default
+    // to Standard) and its completion stamp, if it has one.
+    applyDifficulty(normalizeDifficulty(data.difficulty));
+    updateCompletedAtMs(data.completedAtMs ?? null);
     const defaultCompanionKind: CompanionKind =
       data.player.starterClass === 'Runecaster' ? 'starlight_owl' : 'silverwind_lynx';
     const normalizedPlayer: PlayerState = {
@@ -1107,15 +1222,21 @@ export default function App() {
     setTutorialStepIdx(null);
     setGameState('PLAYING');
     soundEngine.playClick();
-  }, []);
+  }, [applyDifficulty, updateCompletedAtMs]);
 
   const handleContinueSaved = useCallback(
     (slotId: SaveSlotId) => {
       const entry = localSlotMap[slotId];
-      if (!entry) return;
+      if (!entry) {
+        // Phase 4: a slot that exists but cannot be loaded (corrupt or
+        // future-version) fails gracefully with the reason, never a crash.
+        const issue = slotIssues[slotId];
+        if (issue) window.alert(issue.message);
+        return;
+      }
       applySavedBundle(entry.bundle, slotId);
     },
-    [applySavedBundle, localSlotMap]
+    [applySavedBundle, localSlotMap, slotIssues]
   );
 
   const handleContinueCloud = useCallback(
@@ -1146,6 +1267,14 @@ export default function App() {
         // ignore
       }
       setLocalSlotMap((prev) => {
+        const next = { ...prev };
+        delete next[slotId];
+        return next;
+      });
+      // Deleting also clears any corruption/future-version issue, so the
+      // slot returns to a clean Empty state.
+      setSlotIssues((prev) => {
+        if (!prev[slotId]) return prev;
         const next = { ...prev };
         delete next[slotId];
         return next;
@@ -1205,7 +1334,10 @@ export default function App() {
       gainedXp: number,
       flagsOverride?: WorldFlags
     ): { nextPlayer: PlayerState; leveledUp: boolean } => {
-      let next = { ...p, xp: p.xp + gainedXp };
+      // Phase 4: the run's difficulty tier scales all granted XP here, in
+      // the single grant function (Story ×1.15, Standard ×1.0, Hardened
+      // ×1.10). The ×1.30 level curve below is P1 tuning and untouched.
+      let next = { ...p, xp: p.xp + scaleXpForDifficulty(gainedXp, difficultyRef.current) };
       let leveledUp = false;
       while (next.xp >= next.xpToNext) {
         next.xp -= next.xpToNext;
@@ -5087,6 +5219,7 @@ export default function App() {
     specialPrompt,
     showHallOfFame,
     activeSlot,
+    keymap: settings.keymap,
     attemptStep,
     handleTriggerHotbar,
     handleTriggerInscription,
@@ -5109,6 +5242,7 @@ export default function App() {
       specialPrompt,
       showHallOfFame,
       activeSlot,
+      keymap: settings.keymap,
       attemptStep,
       handleTriggerHotbar,
       handleTriggerInscription,
@@ -5129,6 +5263,7 @@ export default function App() {
     specialPrompt,
     showHallOfFame,
     activeSlot,
+    settings.keymap,
     attemptStep,
     handleTriggerHotbar,
     handleTriggerInscription,
@@ -5208,71 +5343,100 @@ export default function App() {
         return;
       }
 
-      const key = e.key.toLowerCase();
-      if (key === 'w' || e.key === 'ArrowUp') {
+      // Number-row skills/runes stay fixed (never remappable).
+      if (['1', '2', '3', '4', '5'].includes(e.key)) {
         e.preventDefault();
         setAutoExploring(false);
-        s.attemptStep(0, -1);
-      } else if (key === 's' || e.key === 'ArrowDown') {
+        s.handleTriggerHotbar(Number(e.key) - 1);
+        return;
+      }
+      if (['6', '7', '8'].includes(e.key)) {
         e.preventDefault();
         setAutoExploring(false);
-        s.attemptStep(0, 1);
-      } else if (key === 'a' || e.key === 'ArrowLeft') {
-        e.preventDefault();
-        setAutoExploring(false);
-        s.attemptStep(-1, 0);
-      } else if (key === 'd' || e.key === 'ArrowRight') {
-        e.preventDefault();
-        setAutoExploring(false);
-        s.attemptStep(1, 0);
-      } else if (key === '.') {
-        e.preventDefault();
-        setAutoExploring(false);
-        s.attemptStep(0, 0);
-      } else if (key === 'z') {
-        e.preventDefault();
-        s.handleToggleAutoExplore();
-      } else if (key === 'r') {
-        e.preventDefault();
-        s.handleSafeRest();
-      } else if (key === 'q') {
-        e.preventDefault();
-        s.handleQuickHeal();
-      } else if (key === 'k') {
-        e.preventDefault();
-        setAutoExploring(false);
-        setActivePanel('SKILLS');
-      } else if (key === 'i') {
-        e.preventDefault();
-        setAutoExploring(false);
-        setActivePanel('INVENTORY');
-      } else if (key === 'j') {
-        e.preventDefault();
-        setAutoExploring(false);
-        setActivePanel('QUESTS');
-      } else if (key === 'm') {
-        e.preventDefault();
-        setAutoExploring(false);
-        setActivePanel('TRAVEL');
-      } else if (e.key === '?') {
-        e.preventDefault();
-        setAutoExploring(false);
-        setActivePanel('LEGEND');
-      } else if (['1', '2', '3', '4', '5'].includes(key)) {
-        e.preventDefault();
-        setAutoExploring(false);
-        s.handleTriggerHotbar(Number(key) - 1);
-      } else if (['6', '7', '8'].includes(key)) {
-        e.preventDefault();
-        setAutoExploring(false);
-        s.handleTriggerInscription(Number(key) - 6);
-      } else if (!isButtonFocused && (e.key === ' ' || e.key === 'Enter')) {
-        e.preventDefault();
-        if (s.armedSkill && s.aimedTarget) {
-          s.handleConfirmAimedTarget();
-        } else {
-          s.handleInteractAction(false);
-        }
+        s.handleTriggerInscription(Number(e.key) - 6);
+        return;
+      }
+
+      // Phase 4: every remappable single-key action routes through the
+      // keymap resolver (game/settings.ts). Arrow keys always move and
+      // Enter always interacts via the resolver's hardcoded fallbacks.
+      const action = resolveKeyAction(s.keymap, e.key);
+      if (!action) return;
+      switch (action) {
+        case 'moveUp':
+          e.preventDefault();
+          setAutoExploring(false);
+          s.attemptStep(0, -1);
+          break;
+        case 'moveDown':
+          e.preventDefault();
+          setAutoExploring(false);
+          s.attemptStep(0, 1);
+          break;
+        case 'moveLeft':
+          e.preventDefault();
+          setAutoExploring(false);
+          s.attemptStep(-1, 0);
+          break;
+        case 'moveRight':
+          e.preventDefault();
+          setAutoExploring(false);
+          s.attemptStep(1, 0);
+          break;
+        case 'wait':
+          e.preventDefault();
+          setAutoExploring(false);
+          s.attemptStep(0, 0);
+          break;
+        case 'explore':
+          e.preventDefault();
+          s.handleToggleAutoExplore();
+          break;
+        case 'rest':
+          e.preventDefault();
+          s.handleSafeRest();
+          break;
+        case 'quickHeal':
+          e.preventDefault();
+          s.handleQuickHeal();
+          break;
+        case 'skills':
+          e.preventDefault();
+          setAutoExploring(false);
+          setActivePanel('SKILLS');
+          break;
+        case 'inventory':
+          e.preventDefault();
+          setAutoExploring(false);
+          setActivePanel('INVENTORY');
+          break;
+        case 'journal':
+          e.preventDefault();
+          setAutoExploring(false);
+          setActivePanel('QUESTS');
+          break;
+        case 'map':
+          e.preventDefault();
+          setAutoExploring(false);
+          setActivePanel('TRAVEL');
+          break;
+        case 'guide':
+          e.preventDefault();
+          setAutoExploring(false);
+          setActivePanel('LEGEND');
+          break;
+        case 'interact':
+          // Matches the pre-P4 behaviour: Space/Enter only interact when a
+          // button isn't focused (so keyboard users can still activate
+          // focused UI buttons natively).
+          if (isButtonFocused) return;
+          e.preventDefault();
+          if (s.armedSkill && s.aimedTarget) {
+            s.handleConfirmAimedTarget();
+          } else {
+            s.handleInteractAction(false);
+          }
+          break;
       }
     };
 
@@ -5635,6 +5799,7 @@ export default function App() {
           onSelectSlot={setActiveSlot}
           localSlots={localSummaries}
           cloudSlots={cloudSummaries}
+          slotIssues={slotIssues}
           chronicleCount={mergedChronicles.length}
           authUser={authUser}
           authBusy={authBusy}
@@ -5647,6 +5812,7 @@ export default function App() {
           onDeleteSlot={handleDeleteSlot}
           onOpenHallOfFame={() => setShowHallOfFame(true)}
           onOpenSettings={() => setShowSettings(true)}
+          onOpenCredits={() => setShowCredits(true)}
           blockKeys={showHallOfFame}
         />
         {showHallOfFame && (
@@ -5665,6 +5831,7 @@ export default function App() {
             onClose={() => setShowSettings(false)}
           />
         )}
+        {showCredits && <CreditsScreen onClose={() => setShowCredits(false)} />}
       </>
     );
   }
@@ -6049,6 +6216,7 @@ export default function App() {
             setGameState('PLAYING');
           }}
           onOpenHallOfFame={() => setShowHallOfFame(true)}
+          onShowCredits={() => setShowCredits(true)}
           onPlayAgain={() => handleStartNew(player.starterClass, activeSlot)}
           onReturnToTitle={() => {
             setActivePanel('NONE');
@@ -6063,6 +6231,7 @@ export default function App() {
           activeSlot={activeSlot}
           player={player}
           derived={derived}
+          difficultyLabel={DIFFICULTY_INFO[difficulty].label}
           authUser={authUser}
           cloudBusy={authBusy || cloudSaving}
           onSignIn={handleSignInGoogle}
@@ -6077,6 +6246,9 @@ export default function App() {
               merchantStocks,
               logs,
               updatedAtMs: Date.now(),
+              version: SAVE_VERSION,
+              difficulty,
+              completedAtMs: completedAtMs ?? undefined,
             };
             const localOk = saveBundleToStorage(bundle, derived.buildTitle, activeSlot, true);
             const slotLabel = activeSlot.replace('_', ' ').toUpperCase();
@@ -6097,6 +6269,7 @@ export default function App() {
                       kills: player.kills,
                       gold: player.gold,
                       updatedAtMs: Date.now(),
+                      completedAtMs: completedAtMs ?? undefined,
                     },
                     payload: bundle,
                   },
@@ -6140,8 +6313,12 @@ export default function App() {
           onSettingsChange={updateSettings}
           onTileSizeChange={handleTileSizeChange}
           onClose={() => setShowSettings(false)}
+          difficulty={difficulty}
+          onDifficultyChange={handleDifficultyChange}
         />
       )}
+
+      {showCredits && <CreditsScreen onClose={() => setShowCredits(false)} />}
 
       {showHallOfFame && (
         <HallOfFameModal

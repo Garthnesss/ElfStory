@@ -1,9 +1,14 @@
 # ElfStory — Status
 
 **Last updated:** 2026-11-14
-**Phase:** Phase 3 — "Content depth" (P3 complete in the working tree, verified by tests + typecheck + build + difficulty sim; awaiting Garth's review/push and a hand play-check)
+**Phase:** Phase 4 — "Polish & hardening" (P4 complete in the working tree, verified by tests + typecheck + build + difficulty sim; awaiting Garth's review/push and a hand play-check)
 
 ## Where things stand
+- **P4 polish & hardening — DONE, VERIFIED** (Nov 14, 2026; `npm test` **69/69** — 49 prior + 20 new Phase 4 tests — `tsc --noEmit` clean, `vite build` clean; P1 tuning untouched and re-verified with `tools/difficulty_sim.py`, which now also prints Story/Hardened headline numbers):
+  - **Difficulty select** (`src/game/difficulty.ts`): Story / Standard / Hardened tiers (enemy HP ×0.75/×1.0/×1.25, enemy ATK ×0.85/×1.0/×1.15, XP ×1.15/×1.0/×1.10). Scaling funnels through `scaleEnemyForDifficulty` inside `createEnemy` — every spawn path covered (side bosses compose through promote + SIDE_BOSS_TUNE: Morvath pins at 376/24 on Standard, 281/21 Story, 471/28 Hardened, all test-asserted). XP multiplier applies in `grantXpAndCheckLevel`. Per-run: chosen beside the class picker on the Title Screen, stored in the save bundle, changeable in Settings with "newly encountered foes only" copy, shown in the pause menu.
+  - **Save versioning + corruption isolation** (`src/game/saveSlots.ts`): `SAVE_VERSION` = 1 stamped on every save (manual / transition / autosave). Missing version = legacy, loads normally; future version refused with a visible message; a corrupt slot renders as corrupted in the Title Screen list (delete + load-attempt both fail gracefully) and never breaks the list or other slots — reads are per-slot isolated end to end.
+  - **Key rebinding** (`src/game/settings.ts` keymap + Settings UI): all 14 single-key actions remappable, merged over defaults so pre-P4 settings blobs hydrate; click-row → press-key capture, Escape cancels, conflicts swap, Reset Defaults restores. Arrows always move, Enter always interacts; digits/Tab/Escape fixed. App handler routes through the pure `resolveKeyAction`.
+  - **Credits + completion stamp** (`src/components/CreditsScreen.tsx`): auto-scrolling credits (any key/click dismisses) from the Title Screen and the Ending Screen. Reaching the ending stamps `completedAtMs` on the active save (first stamp wins; rides local + cloud saves and Abyss continuation); Title Screen slots show "✦ Completed".
 - **Base game — RUNS** (verified Nov 14, 2026): clean install (`--legacy-peer-deps`, Node 24), `npm test` 11/11 pass, `tsc --noEmit` clean, `vite build` clean (single 1.22 MB JS chunk). HANDOFF.md claims audited against code and found unusually honest — all claimed systems present.
 - **Adversarial audit — DONE** (Nov 14, 2026): full report at `~/workspace/your_files/elfstory-adversarial-audit.md` (Garth's files, to be copied into the repo if he wants it there). Headlines: difficulty broken (one-shots floors 1–7, story bosses die in 3–4 hits, side boss Kaelthar out-stats final boss Malakor, Abyss death guaranteed ~floor 25–40), unique content ~2 h of a 2.7–3.8 h full clear, 3 unbounded exploits, product shell missing (settings/music/tutorial/ending).
 - **P0 fixes — DONE, VERIFIED** (Nov 14, 2026): `npm test` **14/14 pass** (11 original + 3 new P0 regression tests), `tsc --noEmit` clean, `vite build` clean. Changes:
@@ -50,5 +55,6 @@
 - [x] Muse: finish P0 (ErrorBoundary, regression tests, test/lint/build green — Nov 14, 2026).
 - [x] Muse: P1 difficulty rebalance (Nov 14, 2026) and P2 top-end shell (Nov 14, 2026) — tests/typecheck/build green for both.
 - [x] Muse: P3 content depth (Nov 14, 2026) — set pieces, 3 archetypes, survey quest, dart traps, 2 relic sets, ambient life; tests/typecheck/build/sim green.
+- [x] Muse: P4 polish & hardening (Nov 14, 2026) — difficulty select, save versioning + per-slot corruption isolation, key rebinding, credits roll + completion stamp; tests/typecheck/build/sim green.
 - [ ] Garth: review + push the P2 + P3 working tree; run the game once by hand (fresh expedition: does the tutorial read well, does the music sit right, does the ending land? Plus P3: find a Sealed Brazier Hall, a Spore Hulk, and Rowan's survey).
 - [ ] Garth: push the JPG commit from the Mac clone (see Open decisions #1).

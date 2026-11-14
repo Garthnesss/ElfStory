@@ -3,6 +3,7 @@ import test from 'node:test';
 import { resolveMusicTheme } from '../src/game/audio';
 import { deriveTrackedObjectives, getQuestNextHint, MAIN_QUEST_ID } from '../src/game/quests';
 import {
+  DEFAULT_KEYMAP,
   DEFAULT_SETTINGS,
   isTutorialDone,
   loadSettings,
@@ -73,7 +74,15 @@ test('settings: legacy P0 mute key is honoured when no blob exists', () => {
 
 test('settings: save/load roundtrip persists and rewrites the legacy key', () => {
   const storage = makeStorage();
-  const next = { sfxVolume: 0.25, musicVolume: 0.5, muted: true, screenShake: false };
+  const next = {
+    sfxVolume: 0.25,
+    musicVolume: 0.5,
+    muted: true,
+    screenShake: false,
+    // Phase 4: GameSettings gained the keymap; the roundtrip fixture
+    // carries the factory bindings.
+    keymap: DEFAULT_KEYMAP,
+  };
   saveSettings(next, storage);
   assert.equal(storage._map.get('elfstory-muted'), '1');
   assert.deepEqual(loadSettings(storage), next);

@@ -1,4 +1,5 @@
 import { makeCritter } from './ambient';
+import { scaleEnemyForDifficulty } from './difficulty';
 import { createConsumable, generateInscription, generateProceduralItem } from './loot';
 import { CritterState, Enemy, EnemyArchetype, GroundLoot, SkillId, Tile, TileKind, ZoneId, ZoneMap } from './types';
 
@@ -242,7 +243,19 @@ export function createHighspireMap(): ZoneMap {
   return town;
 }
 
+/**
+ * Every enemy spawn in the game funnels through here, so the Phase 4
+ * difficulty scaling is applied exactly once, at creation: regular spawns,
+ * story bosses, elites, side bosses (promoteEnemyRank + SIDE_BOSS_TUNE
+ * multiply on top of the scaled base) and Abyss spawns are all covered.
+ * At Standard difficulty the scaler is the identity and the P1 constants
+ * below are the exact stats.
+ */
 export function createEnemy(archetype: EnemyArchetype, x: number, y: number, depth: number): Enemy {
+  return scaleEnemyForDifficulty(createEnemyBase(archetype, x, y, depth));
+}
+
+function createEnemyBase(archetype: EnemyArchetype, x: number, y: number, depth: number): Enemy {
   const abyssBonus = depth > 5 ? (depth - 5) * 0.16 : 0;
   const scale = 1 + (depth - 1) * 0.28 + abyssBonus;
   switch (archetype) {
