@@ -1,7 +1,7 @@
 # ElfStory — Status
 
 **Last updated:** 2026-11-14
-**Phase:** Phase 2 — "Top-end shell" (P2 complete in the working tree, verified by tests + typecheck + build; awaiting Garth's review/push and a hand play-check)
+**Phase:** Phase 3 — "Content depth" (P3 complete in the working tree, verified by tests + typecheck + build + difficulty sim; awaiting Garth's review/push and a hand play-check)
 
 ## Where things stand
 - **Base game — RUNS** (verified Nov 14, 2026): clean install (`--legacy-peer-deps`, Node 24), `npm test` 11/11 pass, `tsc --noEmit` clean, `vite build` clean (single 1.22 MB JS chunk). HANDOFF.md claims audited against code and found unusually honest — all claimed systems present.
@@ -28,6 +28,13 @@
   - **Tutorial** (`src/game/tutorial.ts` + `TutorialOverlay`): six coach-mark steps (move → talk → fight → skills → potion → rest/save) on a fresh expedition, once per device (`elfstory-tutorial-done`), auto-advancing when the coached action is performed, always skippable/advanceable by hand, non-blocking, and re-openable from the Guide ("Replay the First-Run Tutorial").
   - **Real ending** (`src/components/EndingScreen.tsx`): killing Malakor now opens a dedicated ending screen instead of the pause modal — epilogue text that reflects the Bell, Ledger, and Blight choices plus the weakened-ward flag, run stats (level, kills, turns, gold, expedition time), and three exits: Continue into the Endless Abyss (resumes play at the Floor 5 stair), Play Again, Return to Title (Hall of Fame stays one tap away). Victory flag/chronicle behaviour is unchanged.
   - **Quest tracker** (`src/components/QuestTracker.tsx`): the Journal's stage-aware "Next:" guidance is now derived in `src/game/quests.ts` (single source of truth — the Journal imports it too) and pinned on the HUD: main quest on top, tracked side quest beneath it, compact on small screens, hidden while dialogues/prompts own the screen.
+- **P3 content depth — DONE, VERIFIED** (Nov 14, 2026; `npm test` **49/49** — 35 prior + 14 new Phase 3 tests — `tsc --noEmit` clean, `vite build` clean; P1 tuning untouched and re-verified with `tools/difficulty_sim.py`, which now also prints the new archetypes):
+  - **Set-piece rooms** (`generateDungeonFloor` in `src/game/world.ts`): one hand-built room per floor, interior-only so the reachability guarantee/boss/story placement is preserved — Whispering Sepulcher (barrow + F1), Spore-Heart Chamber (mire), Rime Circle (frost), Sealed Brazier Hall (main F2+: light 3 Seal Braziers → the Brazier-Sealed Door opens; App `interactWithTile`). 1,560-floor stress run: 0 errors, set piece on ~every floor, all ordinary chests reachable.
+  - **New enemies**: Grave Husk (Deathless — first killing blow revives at 30% HP via the `handleEnemyDeath` funnel + survivor-set restore in `runEnemyTurns`), Spore Hulk (elite slam tank, death-burst + Poison at point blank), Rime Revenant (elite ranged, Rime Bolts Chill). Gated to side-branch pools + Abyss pool; bestiary + sprites + intents fully wired. Sim lines sit inside P1 bands (e.g. Husk @depth 3: 103 HP, TTK 1.4 + the free revive; Hulk @depth 4: 239 HP, TTK 2.7; Revenant @depth 5: 119 HP, TTK 1.1, 27 hits-to-die — glass cannon by design).
+  - **Survey quest** "Charting the Deep Roads" (`deep_survey`): transcribe 6 steles anywhere; progress from `readLoreIds` (pre-acceptance reading counts); Rowan gives/turns in; tracker + journal hints wired; reward Surveyor's Star-Compass.
+  - **Venom Dart Snare** (`dart_trap`): second trap type — Agility 4+ to spot, damage + Poison (3t), depth-2+ scatter, canvas art, Legend/hover entries, auto-explore avoids revealed ones.
+  - **Relic sets 2 → 4** (Thornbound, Rimebound; 8 pieces total): bonuses in `computeDerivedStats`, depth-gated drop pool, fixed values.
+  - **Overworld & zone life** (`src/game/ambient.ts`): 5 roaming townsfolk with dialogue, bark lines for all 18 NPCs, 6 critter kinds (non-combat/non-blocking, flee the player), 4 POIs (Standing Stones, Hunter's Camp, Roadside Shrine, Old Outpost Oak), per-biome dungeon ambience lines. Save-safe: critters persist as plain zone data; pre-P3 saves hydrate unchanged (round-trip tested).
 
 ## Decisions made
 - Audit first, fix second (Nov 14, 2026, Garth).
@@ -42,5 +49,6 @@
 ## Next actions
 - [x] Muse: finish P0 (ErrorBoundary, regression tests, test/lint/build green — Nov 14, 2026).
 - [x] Muse: P1 difficulty rebalance (Nov 14, 2026) and P2 top-end shell (Nov 14, 2026) — tests/typecheck/build green for both.
-- [ ] Garth: review + push the P2 working tree; run the game once by hand (fresh expedition: does the tutorial read well, does the music sit right, does the ending land?).
+- [x] Muse: P3 content depth (Nov 14, 2026) — set pieces, 3 archetypes, survey quest, dart traps, 2 relic sets, ambient life; tests/typecheck/build/sim green.
+- [ ] Garth: review + push the P2 + P3 working tree; run the game once by hand (fresh expedition: does the tutorial read well, does the music sit right, does the ending land? Plus P3: find a Sealed Brazier Hall, a Spore Hulk, and Rowan's survey).
 - [ ] Garth: push the JPG commit from the Mac clone (see Open decisions #1).

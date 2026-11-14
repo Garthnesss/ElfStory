@@ -13,7 +13,8 @@ def case_block(arch):
 
 BASE = {}
 for arch in ['plague_rat','goblin_skirmisher','crypt_skeleton','bone_acolyte','ash_cultist',
-             'shadow_stalker','iron_golem','cinder_wisp','dread_wraith','blight_weaver','obsidian_warden']:
+             'shadow_stalker','iron_golem','cinder_wisp','dread_wraith','blight_weaver','obsidian_warden',
+             'grave_husk','spore_hulk','rime_revenant']:
     b = case_block(arch)
     hp = int(re.search(r'hp: Math\.round\((\d+) \* scale\)', b).group(1))
     atk = int(re.search(r'atk: Math\.round\((\d+) \* scale\)', b).group(1))
@@ -40,7 +41,7 @@ POOLS = {1:['plague_rat','goblin_skirmisher','crypt_skeleton'],
  3:['crypt_skeleton','bone_acolyte','ash_cultist','shadow_stalker','blight_weaver','dread_wraith'],
  4:['ash_cultist','shadow_stalker','iron_golem','cinder_wisp','dread_wraith','obsidian_warden'],
  5:['ash_cultist','shadow_stalker','iron_golem','dread_wraith','obsidian_warden']}
-ABYSS_POOL=['ash_cultist','shadow_stalker','iron_golem','cinder_wisp','bone_acolyte','dread_wraith','blight_weaver','obsidian_warden']
+ABYSS_POOL=['ash_cultist','shadow_stalker','iron_golem','cinder_wisp','bone_acolyte','dread_wraith','blight_weaver','obsidian_warden','grave_husk','spore_hulk','rime_revenant']
 
 def scale(d): return 1+(d-1)*0.28 + ((d-5)*0.16 if d>5 else 0)
 def edef(arch,d):
@@ -70,6 +71,7 @@ def enemy_hits_to_kill_player(eatk, p):
     return round(p['maxhp'] / max(1, eatk - round(p['def_']*0.65)), 1)
 
 level, xp_pool = 1, 0
+SNAP = {}
 print(f"XP growth parsed: x{XP_GROWTH} | side-boss tune parsed: {TUNE}")
 print(f"{'Flr':>4} {'Lvl':>4} {'P.ATK':>6} {'P.HP':>6} {'avgHP':>6} {'TTK':>5} {'+comp':>6} {'eATK':>5} {'hits2die':>9}")
 for d in list(range(1,11)) + [12,15,18,21,24,27,30,33,36,40,45,50]:
@@ -82,6 +84,7 @@ for d in list(range(1,11)) + [12,15,18,21,24,27,30,33,36,40,45,50]:
     while xp_pool >= xp_to_next(level): xp_pool -= xp_to_next(level); level += 1
     p = player_at(level, min(d,10) if d>10 else d)
     if d > 10: p = player_at(level, 10)  # gear quality saturates: audit convention
+    SNAP[d] = (level, p)
     avg_hp = sum(s[0] for s in stats)/len(pool); avg_def = sum(s[2] for s in stats)/len(pool)
     avg_atk = sum(s[1] for s in stats)/len(pool)
     pd = exp_dmg(p['atk'], p['crit'], avg_def)
@@ -103,5 +106,13 @@ for bid, arch, effd, arr in [('boss_morvath','dread_wraith',4,9),('boss_vexis','
     p = player_at(arr, 5)
     dmg = exp_dmg(p['atk'], p['crit'], df)
     print(f"  {bid}: HP {hp} ATK {atk} DEF {df} | player L{arr} TTK {hp/dmg:.1f} | basic {max(1,atk-round(p['def_']*0.65))}/hit vs HP {p['maxhp']}")
+print("\nPhase 3 archetypes (side-dungeon gates + Abyss; player = main-progression snapshot at that depth):")
+for arch, depths in [('grave_husk',[2,3,6,10]), ('spore_hulk',[3,4,6,10]), ('rime_revenant',[4,5,6,10])]:
+    for d in depths:
+        lvl, p = SNAP[d]
+        hp, atk, df, xp = estats(arch, d)
+        pd = exp_dmg(p['atk'], p['crit'], df)
+        print(f"  {arch} @depth {d}: HP {hp} ATK {atk} DEF {df} XP {xp} | player L{lvl} TTK {hp/pd:.1f} hits | enemy hits-to-die {enemy_hits_to_kill_player(atk,p)}")
+
 print(f"\nCompanion (lynx): L5 maxHP {comp_maxhp(5)}, L8 {comp_maxhp(8)}, L12 {comp_maxhp(12)}, L20 {comp_maxhp(20)}; dmg/hit at L8 vs def 6: {comp_dmg(8,6):.0f}")
 print(f"Potion at maxHp 194: heals {max(24, round(194*0.35))} HP (was flat 24); at maxHp 61: {max(24, round(61*0.35))}")

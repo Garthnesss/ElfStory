@@ -1,4 +1,4 @@
-import { CompanionKind, EnemyArchetype, Item, PlayerState, TileKind } from './types';
+import { CompanionKind, CritterKind, EnemyArchetype, Item, PlayerState, TileKind } from './types';
 
 // 16x16 pixel sprite matrices using single-character palette keys ('.' = transparent)
 type PaletteMap = Record<string, string>;
@@ -359,6 +359,69 @@ const ENEMY_MATRICES: Record<EnemyArchetype, { rows: string[]; palette: PaletteM
       '..oooooo.oooooo.',
     ],
     palette: { o: '#090B10', B: '#334155', b: '#1E293B', s: '#475569', R: '#F43F5E', O: '#FEF08A', M: '#FB7185' },
+  },
+  grave_husk: {
+    rows: [
+      '.....oooooo.....',
+      '....oTTTTTTo....',
+      '...oTTTTTTTTo...',
+      '...oToTTTToTo...',
+      '...oTTTTTTTTo...',
+      '....oTooooTo....',
+      '..ooTTTTTTTToo..',
+      '.oTTtTTTTTTtTTo.',
+      '.oToTTTTTTTToTo.',
+      '..o.oTttttTo.o..',
+      '....oTTTTTTo....',
+      '...oTTttttTTo...',
+      '...oTTo..oTTo...',
+      '..oTTo....oTTo..',
+      '..ooo......ooo..',
+      '................',
+    ],
+    palette: { o: '#090B10', T: '#D97706', t: '#92400E' },
+  },
+  spore_hulk: {
+    rows: [
+      '..oooooooooooo..',
+      '.oGGGGGGGGGGGGo.',
+      'oGGGgGGGGgGGGGGo',
+      'oGGGGGGGGGGGGGGo',
+      'oGgGGYYYYYYgGGGo',
+      '.oGGGgGGGGgGGGo.',
+      '..oooooooooooo..',
+      '.oBBBBBBBBBBBBo.',
+      'oBBoBBBBBBBBoBBo',
+      'oBBoBBbbbBBBoBBo',
+      '.ooBBBBBBBBBBoo.',
+      '...oBBBooBBBo...',
+      '...oBBBo.oBBBo..',
+      '..oBBBBo.oBBBBo.',
+      '..oooooo.oooooo.',
+      '................',
+    ],
+    palette: { o: '#090B10', G: '#84CC16', g: '#4D7C0F', Y: '#FDE047', B: '#65A30D', b: '#3F6212' },
+  },
+  rime_revenant: {
+    rows: [
+      '.....oooooo.....',
+      '....oCCCCCCo....',
+      '...oCCWWWWCCo...',
+      '...oCWcCCcWCo...',
+      '...oCCWWWWCCo...',
+      '....oCCooCCo....',
+      '..ooCCCCCCCCoo..',
+      '.oCCWCCCCCCWCCo.',
+      '.oCoCCWCCCWCoCo.',
+      '..o.oCccccCo.o..',
+      '....oCCWWCCo....',
+      '...oCCccccCCo...',
+      '...oCCo..oCCo...',
+      '..oCCo....oCCo..',
+      '..ooo......ooo..',
+      '................',
+    ],
+    palette: { o: '#090B10', C: '#7DD3FC', c: '#0369A1', W: '#F0F9FF' },
   },
   boss_bone_cantor: {
     rows: [
@@ -1051,6 +1114,147 @@ export function getCompanionSprite(kind: CompanionKind, frame = 0): HTMLCanvasEl
     W: '#ECFDF5',
     e: '#FDE047',
   });
+}
+
+// === PHASE 3 AMBIENT CRITTERS (non-combat wildlife) ===
+const CRITTER_MATRICES: Record<CritterKind, { rows: string[]; palette: PaletteMap }> = {
+  vale_rabbit: {
+    rows: [
+      '................',
+      '.....oo..oo.....',
+      '....oWWo.oWWo...',
+      '....oWWo.oWWo...',
+      '....oWWo.oWWo...',
+      '.....oWWWWo.....',
+      '....oWeWWeWo....',
+      '....oWWWWWWo....',
+      '...oWWWWWWWWo...',
+      '..oWWWWWWWWWWo..',
+      '..oWWoWWWWoWWo..',
+      '...ooWWWWWWoo...',
+      '.....oWWWWo.....',
+      '....oo....oo....',
+      '................',
+      '................',
+    ],
+    palette: { o: '#090B10', W: '#E7E5E4', e: '#1C1917' },
+  },
+  ash_fox: {
+    rows: [
+      '................',
+      '...oo......oo...',
+      '..oOOo....oOOo..',
+      '..oOOOooooOOOo..',
+      '...oOOOOOOOOo...',
+      '....oOeOOeOo....',
+      '....oOOOOOOo....',
+      '.....oOOOOo.....',
+      '..ooOOOOOOOOo...',
+      '.oWWoOOOOOOOo...',
+      '..oWWOOOOOOo....',
+      '...ooooooooo....',
+      '....oOO..OOo....',
+      '....oOO..OOo....',
+      '...ooo....ooo...',
+      '................',
+    ],
+    palette: { o: '#090B10', O: '#EA580C', W: '#FED7AA', e: '#1C1917' },
+  },
+  cinder_crow: {
+    rows: [
+      '................',
+      '................',
+      '......oooo......',
+      '.....oBBBBo.....',
+      '....oBeBBBBoo...',
+      '....oBBBBBBBYo..',
+      '...ooBBBBBBo....',
+      '.ooBBBBBBBBBoo..',
+      'oBBBoBBBBBoBBBo.',
+      '.oooBBBBBBooo...',
+      '....oBBBBBo.....',
+      '.....oBBBo......',
+      '.....oBBo.......',
+      '....oo.oo.......',
+      '................',
+      '................',
+    ],
+    palette: { o: '#090B10', B: '#292524', e: '#FBBF24', Y: '#F59E0B' },
+  },
+  cave_bat: {
+    rows: [
+      '................',
+      '................',
+      '..oo........oo..',
+      '.oBBo..oo..oBBo.',
+      'oBBBBooBBooBBBo.',
+      'oBBBBBoBBBoBBBBo',
+      '.oBBBooBBBBo....',
+      '..ooo.oBBeBo....',
+      '......oBBBBo....',
+      '.......oBo......',
+      '......oo.oo.....',
+      '................',
+      '................',
+      '................',
+      '................',
+      '................',
+    ],
+    palette: { o: '#090B10', B: '#57534E', e: '#EF4444' },
+  },
+  town_cat: {
+    rows: [
+      '................',
+      '................',
+      '...oo......oo...',
+      '..oOOo....oOOo..',
+      '..oOOOOOOOOOOo..',
+      '...oOeOOOOeOo...',
+      '...oOOOOOOOOo...',
+      '....oOOOOOOo....',
+      '....oOOOOOOo....',
+      '...oOOOOOOOOo...',
+      '..oOOOOOOOOOOo..',
+      '..oOOoOOOOoOOo..',
+      '...oo.OOOO.oo...',
+      '......OOOO......',
+      '.....oooooo.....',
+      '................',
+    ],
+    palette: { o: '#090B10', O: '#A8A29E', e: '#1C1917' },
+  },
+  fen_frog: {
+    rows: [
+      '................',
+      '................',
+      '................',
+      '...oo......oo...',
+      '..oYYo....oYYo..',
+      '...oGGGGGGGGo...',
+      '..oGGGGGGGGGGGo.',
+      '..oGgGGGGGGgGo..',
+      '..oGGGGGGGGGGGo.',
+      '...oooooooooo...',
+      '..oo........oo..',
+      '.oGGOo....oOGGo.',
+      '..ooo......ooo..',
+      '................',
+      '................',
+      '................',
+    ],
+    palette: { o: '#090B10', G: '#4ADE80', g: '#166534', Y: '#FDE047' },
+  },
+};
+
+export function getCritterSprite(kind: CritterKind, frame = 0): HTMLCanvasElement {
+  const def = CRITTER_MATRICES[kind];
+  const f = Math.abs(frame) % 2;
+  if (f === 0) {
+    return bakeMatrix(`critter_${kind}_f0`, def.rows, def.palette);
+  }
+  // Frame 1: one-row hop/flutter offset, same trick as enemy sprites.
+  const shifted = ['................', ...def.rows.slice(0, 15)];
+  return bakeMatrix(`critter_${kind}_f1`, shifted, def.palette);
 }
 
 export function getPropSprite(

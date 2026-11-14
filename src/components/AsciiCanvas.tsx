@@ -4,6 +4,7 @@ import { chebyshev, findPathPoints } from '../game/combat';
 import { SKILLS } from '../game/skills';
 import {
   getCompanionSprite,
+  getCritterSprite,
   getEnemySprite,
   getLootSprite,
   getNpcSprite,
@@ -88,6 +89,10 @@ function getTileContextHint(tile: Tile): string | null {
     case 'trap':
       return tile.revealed
         ? 'Armed Spike Snare — deals piercing bleed if stepped on.'
+        : 'Dangerous dungeon tile.';
+    case 'dart_trap':
+      return tile.revealed
+        ? 'Venom Dart Snare — wall darts deal damage and Poison (3t). Agility 4+ spots and disarms it.'
         : 'Dangerous dungeon tile.';
     case 'spore_pool':
       return 'Venomous Spore Pool — Agility 3+ harvests Dust safely, else deals Poison damage.';
@@ -581,6 +586,9 @@ export const AsciiCanvas: React.FC<AsciiCanvasProps> = ({
             } else if (tile.kind === 'trap' && tile.revealed) {
               const trapCanvas = getSpecialStructureCanvas('trap', TILE_SIZE, tile.used);
               ctx.drawImage(trapCanvas, px, py);
+            } else if (tile.kind === 'dart_trap' && tile.revealed) {
+              const dartCanvas = getSpecialStructureCanvas('dart_trap', TILE_SIZE, tile.used);
+              ctx.drawImage(dartCanvas, px, py);
             } else if (
               (tile.kind === 'spore_pool' ||
                 tile.kind === 'frost_vent' ||
@@ -784,6 +792,16 @@ export const AsciiCanvas: React.FC<AsciiCanvasProps> = ({
 
         const sprite = getLootSprite(drop.item);
         ctx.drawImage(sprite, px + 5, py + 5 + bob, TILE_SIZE - 10, TILE_SIZE - 10);
+      }
+
+      // === 2.5 CRITTERS (Phase 3 ambient wildlife — purely decorative) ===
+      for (const critter of s.zone.critters ?? []) {
+        const ctile = s.zone.tiles[critter.y]?.[critter.x];
+        if (!ctile?.visible && !(s.zone.id === 'overworld' && ctile?.explored)) continue;
+        const px = offsetX + critter.x * TILE_SIZE;
+        const py = offsetY + critter.y * TILE_SIZE;
+        const critterSprite = getCritterSprite(critter.kind, spriteFrame + critter.x + critter.y);
+        ctx.drawImage(critterSprite, px + 5, py + 6, TILE_SIZE - 10, TILE_SIZE - 10);
       }
 
       // === 3. NPCS ===

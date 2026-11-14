@@ -74,6 +74,18 @@ export const RELIC_SETS: Record<
     summary: '2-Piece Set: Obsidian-plate & emberheart wards tempered in deep vaults.',
     pieces: ['Cinderforged Crown', 'Emberheart Signet'],
   },
+  thornbound: {
+    name: 'Thornbound Covenant',
+    bonusLabel: '+3 ATK · +4 Thorns · +3% Lifesteal · +12 Max HP',
+    summary: '2-Piece Set: Fen-root regalia grown, not forged, in the Fungal Hollow.',
+    pieces: ['Thornbound Circlet', 'Fenroot Talisman'],
+  },
+  rimebound: {
+    name: 'Rimebound Regalia',
+    bonusLabel: '+5 DEF · +8% Dodge · +10 Max Mana · +8 Max HP',
+    summary: '2-Piece Set: Glacier-heart plate sealed in Frostpeak rime.',
+    pieces: ['Glacierheart Pendant', 'Rimebound Plate'],
+  },
 };
 
 let lootCounter = 100;
@@ -673,6 +685,90 @@ export function createNamedRelic(tag: string): Item {
         value: 190,
         description: 'A glowing ruby band forged from Sovereign furnace embers.',
       };
+    case 'thornbound_circlet':
+      return {
+        id: nextItemId(),
+        name: 'Thornbound Circlet',
+        category: 'equipment',
+        slot: 'helm',
+        rarity: 'Relic',
+        glyph: '⍟',
+        levelReq: 3,
+        upgradeLevel: 0,
+        stats: { atk: 5, thorns: 6, maxHp: 14, def: 4 },
+        affix: 'thorns_burst',
+        affixLabel: 'Passive: Thorns reflect +6 bonus damage',
+        setId: 'thornbound',
+        value: 180,
+        description: 'A living circlet of fen-thorn, still slowly growing around its wearer.',
+      };
+    case 'fenroot_talisman':
+      return {
+        id: nextItemId(),
+        name: 'Fenroot Talisman',
+        category: 'equipment',
+        slot: 'amulet',
+        rarity: 'Relic',
+        glyph: '◊',
+        levelReq: 3,
+        upgradeLevel: 0,
+        stats: { lifesteal: 4, maxHp: 16, spellPower: 5, def: 3 },
+        affix: 'vampiric_touch',
+        affixLabel: 'Passive: Heals 3 HP on every Critical Hit',
+        setId: 'thornbound',
+        value: 180,
+        description: 'Root-heart of a Hollow bloom-mother, pulsing with stolen sap.',
+      };
+    case 'glacierheart_pendant':
+      return {
+        id: nextItemId(),
+        name: 'Glacierheart Pendant',
+        category: 'equipment',
+        slot: 'amulet',
+        rarity: 'Relic',
+        glyph: '❖',
+        levelReq: 4,
+        upgradeLevel: 0,
+        stats: { def: 5, maxMana: 18, dodgeChance: 6, spellPower: 6 },
+        affix: 'arcane_ward',
+        affixLabel: 'Passive: Start floor with Shielded (+4 DEF, 4t)',
+        setId: 'rimebound',
+        value: 195,
+        description: 'A shard of the first Frostpeak glacier, cold enough to slow arrows.',
+      };
+    case 'rimebound_plate':
+      return {
+        id: nextItemId(),
+        name: 'Rimebound Plate',
+        category: 'equipment',
+        slot: 'armor',
+        rarity: 'Relic',
+        glyph: '☗',
+        levelReq: 4,
+        upgradeLevel: 0,
+        stats: { def: 12, dodgeChance: 5, maxHp: 16 },
+        affix: 'chill_on_hit',
+        affixLabel: 'Passive: Strikes have 30% chance to Chill target',
+        setId: 'rimebound',
+        value: 195,
+        description: 'Caldera-forged plate quenched in glacier melt; frost blooms across it nightly.',
+      };
+    case 'surveyor_compass':
+      return {
+        id: nextItemId(),
+        name: 'Surveyor’s Star-Compass',
+        category: 'equipment',
+        slot: 'amulet',
+        rarity: 'Epic',
+        glyph: '✦',
+        levelReq: 2,
+        upgradeLevel: 0,
+        stats: { spellPower: 7, maxMana: 12, dodgeChance: 6, critChance: 5 },
+        affix: 'first_strike',
+        affixLabel: 'Passive: First Strike on floor deals +30% damage',
+        value: 150,
+        description: 'Rowan’s own survey compass; its needle points at the nearest unread stele.',
+      };
     case 'silverbridge_band':
       return {
         id: nextItemId(),
@@ -727,10 +823,29 @@ export function createNamedRelic(tag: string): Item {
 }
 
 export function createRandomSetRelic(depth: number): Item {
+  // Phase 3: pool grows with depth across all four relic sets (8 pieces).
   const pool =
     depth <= 2
       ? ['sylvan_longblade', 'starlight_mantle']
-      : ['sylvan_longblade', 'starlight_mantle', 'cinder_crown', 'emberheart_signet'];
+      : depth === 3
+        ? [
+            'sylvan_longblade',
+            'starlight_mantle',
+            'cinder_crown',
+            'emberheart_signet',
+            'thornbound_circlet',
+            'fenroot_talisman',
+          ]
+        : [
+            'sylvan_longblade',
+            'starlight_mantle',
+            'cinder_crown',
+            'emberheart_signet',
+            'thornbound_circlet',
+            'fenroot_talisman',
+            'glacierheart_pendant',
+            'rimebound_plate',
+          ];
   const picked = pool[Math.floor(Math.random() * pool.length)];
   return createNamedRelic(picked);
 }

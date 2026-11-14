@@ -1,5 +1,6 @@
+import { makeCritter } from './ambient';
 import { createConsumable, generateInscription, generateProceduralItem } from './loot';
-import { Enemy, EnemyArchetype, GroundLoot, SkillId, Tile, TileKind, ZoneId, ZoneMap } from './types';
+import { CritterState, Enemy, EnemyArchetype, GroundLoot, SkillId, Tile, TileKind, ZoneId, ZoneMap } from './types';
 
 let enemyIdSeq = 1;
 function nextEnemyId(): string {
@@ -37,6 +38,8 @@ function makeTile(x: number, y: number, kind: TileKind): Tile {
       return { x, y, kind, glyph: '$', color: '#FBBF24', walkable: true, blocksSight: false, explored: false, visible: false, label: 'Ironbound Chest' };
     case 'trap':
       return { x, y, kind, glyph: '^', color: '#EF4444', walkable: true, blocksSight: false, explored: false, visible: false, revealed: false, label: 'Spike Snare' };
+    case 'dart_trap':
+      return { x, y, kind, glyph: '»', color: '#A3E635', walkable: true, blocksSight: false, explored: false, visible: false, revealed: false, label: 'Venom Dart Snare' };
     case 'lore_tablet':
       return { x, y, kind, glyph: '‡', color: '#A78BFA', walkable: true, blocksSight: false, explored: false, visible: false, label: 'Carved Stele' };
     case 'tree':
@@ -185,11 +188,17 @@ export function createOakhavenMap(): ZoneMap {
       { id: 'mira', x: 18, y: 2, glyph: '@', color: '#4EA885', name: 'Herbalist Mira', title: 'Apothecary' },
       { id: 'vance', x: 14, y: 10, glyph: '@', color: '#60A5FA', name: 'Warden Vance', title: 'Outpost Captain' },
       { id: 'vex', x: 7, y: 11, glyph: '@', color: '#C084FC', name: 'Vex the Quiet', title: 'Shadow Broker' },
+      { id: 'pell', x: 10, y: 5, glyph: '@', color: '#A8A29E', name: 'Pell the Carter', title: 'Outpost Carter', homeX: 10, homeY: 5, roams: true },
+      { id: 'wren', x: 21, y: 8, glyph: '@', color: '#FDE68A', name: 'Sister Wren', title: 'Shrine Keeper', homeX: 21, homeY: 8, roams: true },
     ],
     { x: 12, y: 9 },
     { x: 12, y: 14 }
   );
   town.tiles[7][0].label = 'Silverwood Vale West Gate';
+  // Phase 3 POI: the Old Outpost Oak — flavor landmark by the north wall.
+  town.tiles[1][1].interactId = 'poi_old_oak';
+  town.tiles[1][1].label = 'The Old Outpost Oak';
+  town.critters = [makeCritter('town_cat', 15, 6)];
   return town;
 }
 
@@ -214,7 +223,7 @@ export function createHighspireMap(): ZoneMap {
     '################################',
   ];
 
-  return buildTownFromAscii(
+  const town = buildTownFromAscii(
     'highspire',
     'Highspire Citadel',
     'Upper Stone Bastion',
@@ -224,10 +233,13 @@ export function createHighspireMap(): ZoneMap {
       { id: 'corvus', x: 5, y: 6, glyph: '@', color: '#F59E0B', name: 'Magistrate Corvus', title: 'Citadel Arbiter' },
       { id: 'kaelen', x: 23, y: 6, glyph: '@', color: '#EF4444', name: 'Guildmaster Kaelen', title: 'Warden of the Descent' },
       { id: 'orin', x: 21, y: 11, glyph: '@', color: '#C084FC', name: 'Relic Appraiser Orin', title: 'Master Artificer' },
+      { id: 'tomas', x: 10, y: 8, glyph: '@', color: '#93C5FD', name: 'Page Tomas', title: 'Citadel Page', homeX: 10, homeY: 8, roams: true },
     ],
     { x: 14, y: 11 },
     { x: 14, y: 13 }
   );
+  town.critters = [makeCritter('cinder_crow', 25, 2)];
+  return town;
 }
 
 export function createEnemy(archetype: EnemyArchetype, x: number, y: number, depth: number): Enemy {
@@ -447,6 +459,65 @@ export function createEnemy(archetype: EnemyArchetype, x: number, y: number, dep
         isElite: true,
         description: 'Towering black-glass sentinel wielding crushing Obsidian Cleaves.',
       };
+    case 'grave_husk':
+      return {
+        id: nextEnemyId(),
+        archetype,
+        name: 'Grave Husk',
+        glyph: 'h',
+        color: '#D97706',
+        x,
+        y,
+        hp: Math.round(66 * scale),
+        maxHp: Math.round(66 * scale),
+        atk: Math.round(12 * scale),
+        def: 3 + Math.floor(depth / 2),
+        xpReward: Math.round(30 * scale),
+        goldReward: Math.round(13 * scale),
+        statuses: [],
+        alerted: false,
+        description: 'Desiccated barrow-guard. Deathless: the first killing blow leaves it standing.',
+      };
+    case 'spore_hulk':
+      return {
+        id: nextEnemyId(),
+        archetype,
+        name: 'Spore Hulk',
+        glyph: 'H',
+        color: '#84CC16',
+        x,
+        y,
+        hp: Math.round(130 * scale),
+        maxHp: Math.round(130 * scale),
+        atk: Math.round(13 * scale),
+        def: 4 + Math.floor(depth / 2),
+        xpReward: Math.round(55 * scale),
+        goldReward: Math.round(26 * scale),
+        statuses: [],
+        alerted: false,
+        isElite: true,
+        description: 'Siege-sized bloom-mother. Bursts in a spore cloud when slain — kill it at range.',
+      };
+    case 'rime_revenant':
+      return {
+        id: nextEnemyId(),
+        archetype,
+        name: 'Rime Revenant',
+        glyph: 'R',
+        color: '#7DD3FC',
+        x,
+        y,
+        hp: Math.round(56 * scale),
+        maxHp: Math.round(56 * scale),
+        atk: Math.round(12 * scale),
+        def: 2 + Math.floor(depth / 2),
+        xpReward: Math.round(40 * scale),
+        goldReward: Math.round(21 * scale),
+        statuses: [],
+        alerted: false,
+        isElite: true,
+        description: 'Frostpeak dead that refused the thaw. Its Rime Bolts Chill their target.',
+      };
     case 'boss_bone_cantor':
       return {
         id: nextEnemyId(),
@@ -563,7 +634,7 @@ interface Room {
 
 export function generateDungeonFloor(
   depth: number,
-  options?: { skipStoryBoss?: boolean }
+  options?: { skipStoryBoss?: boolean; sideBranch?: 'barrow' | 'mire' | 'frost' }
 ): ZoneMap {
   const width = 46;
   const height = 32;
@@ -722,13 +793,203 @@ export function generateDungeonFloor(
     tiles[pick2.room.cy][pick2.room.cx] = makeTile(pick2.room.cx, pick2.room.cy, secondKind);
   }
 
+  // ------------------------------------------------------------------
+  // Phase 3: hand-built set-piece rooms — one per floor, injected into a
+  // spare room's interior. Set pieces only redecorate the interior (the
+  // sealed-brazier nook partitions one corner), so the reachability
+  // guarantee at the end of this generator still holds: every room centre
+  // stays walkable or openly connected, and boss/story placement is
+  // untouched (set pieces never take the first or final room).
+  // ------------------------------------------------------------------
+  const setPieceRoomIndices = new Set<number>();
+  const setPieceEnemies: Enemy[] = [];
+
+  const setPieceTileOk = (x: number, y: number): boolean =>
+    tiles[y]?.[x]?.kind === 'floor' &&
+    (x !== spawnPoint.x || y !== spawnPoint.y) &&
+    (x !== returnPoint.x || y !== returnPoint.y);
+
+  // Decor placement may also overwrite the generator's decorative pillars
+  // and torches (e.g. the corner pillar sits exactly on a Seal Brazier
+  // spot) — but never gameplay tiles.
+  const setPieceDecorOk = (x: number, y: number): boolean => {
+    const k = tiles[y]?.[x]?.kind;
+    return (
+      (k === 'floor' || k === 'pillar' || k === 'torch') &&
+      (x !== spawnPoint.x || y !== spawnPoint.y) &&
+      (x !== returnPoint.x || y !== returnPoint.y)
+    );
+  };
+
+  const setP = (x: number, y: number, kind: TileKind, label?: string, interactId?: string) => {
+    tiles[y][x] = makeTile(x, y, kind);
+    if (label) tiles[y][x].label = label;
+    if (interactId) tiles[y][x].interactId = interactId;
+  };
+
+  const placeSetPieceEnemy = (arch: EnemyArchetype, spots: Array<{ x: number; y: number }>) => {
+    for (const s of spots) {
+      if (!setPieceTileOk(s.x, s.y)) continue;
+      if (setPieceEnemies.some((e) => e.x === s.x && e.y === s.y)) continue;
+      setPieceEnemies.push(createEnemy(arch, s.x, s.y, depth));
+      return;
+    }
+  };
+
+  type SetPieceKind = 'sepulcher' | 'spore_heart' | 'rime_circle' | 'sealed_brazier';
+  let setPieceKind: SetPieceKind =
+    options?.sideBranch === 'mire'
+      ? 'spore_heart'
+      : options?.sideBranch === 'frost'
+        ? 'rime_circle'
+        : options?.sideBranch === 'barrow' || depth === 1
+          ? 'sepulcher'
+          : 'sealed_brazier';
+
+  const findSetPieceRoom = (minW: number, minH: number) =>
+    rooms
+      .map((room, idx) => ({ room, idx }))
+      .filter(
+        ({ room, idx }) =>
+          !reservedRooms.has(idx) && !specialRoomIndices.has(idx) && room.w >= minW && room.h >= minH
+      )
+      .sort((a, b) => b.room.w * b.room.h - a.room.w * a.room.h)[0];
+
+  let setPiecePick =
+    setPieceKind === 'sealed_brazier' ? findSetPieceRoom(7, 6) : findSetPieceRoom(6, 5);
+  if (!setPiecePick && setPieceKind === 'sealed_brazier') {
+    setPieceKind = 'sepulcher';
+    setPiecePick = findSetPieceRoom(6, 5);
+  }
+
+  if (setPiecePick) {
+    const room = setPiecePick.room;
+    setPieceRoomIndices.add(setPiecePick.idx);
+    const { x: rx0, y: ry0, w: rw, h: rh, cx, cy } = room;
+
+    if (setPieceKind === 'sepulcher') {
+      // Whispering Sepulcher: pillar corners, twin sarcophagi guarded by
+      // trapped approaches, and an epitaph stele at the heart.
+      paintRoomFloorTint(room, '#3A362F');
+      for (const [px, py] of [
+        [rx0 + 1, ry0 + 1],
+        [rx0 + rw - 2, ry0 + 1],
+        [rx0 + 1, ry0 + rh - 2],
+        [rx0 + rw - 2, ry0 + rh - 2],
+      ]) {
+        if (setPieceDecorOk(px, py)) setP(px, py, 'pillar', 'Sepulcher Pillar');
+      }
+      if (setPieceTileOk(cx - 2, cy)) setP(cx - 2, cy, 'chest', 'Stone Sarcophagus');
+      if (setPieceTileOk(cx + 2, cy)) setP(cx + 2, cy, 'chest', 'Stone Sarcophagus');
+      if (setPieceTileOk(cx, cy + 1)) setP(cx, cy + 1, 'lore_tablet', 'Sepulcher Epitaph', `lore_floor_${depth}`);
+      if (setPieceTileOk(cx - 2, cy + 1)) setP(cx - 2, cy + 1, 'trap');
+      if (setPieceTileOk(cx + 2, cy + 1)) setP(cx + 2, cy + 1, depth >= 2 ? 'dart_trap' : 'trap');
+      const guards: EnemyArchetype[] =
+        options?.sideBranch === 'barrow'
+          ? ['grave_husk', 'crypt_skeleton']
+          : ['crypt_skeleton', 'plague_rat'];
+      placeSetPieceEnemy(guards[0], [
+        { x: cx - 1, y: cy - 1 },
+        { x: cx, y: cy - 1 },
+      ]);
+      placeSetPieceEnemy(guards[1], [
+        { x: cx + 1, y: cy - 1 },
+        { x: cx, y: cy + 2 },
+      ]);
+    } else if (setPieceKind === 'spore_heart') {
+      // Spore-Heart Chamber: a cursed altar "heart" ringed by live spore
+      // pools — cross the poison or skirt the walls to make the pact.
+      paintRoomFloorTint(room, '#1F3D2B');
+      setP(cx, cy, 'cursed_altar', 'Spore-Heart Bloom');
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          if (setPieceTileOk(cx + dx, cy + dy)) setP(cx + dx, cy + dy, 'spore_pool', 'Heart-Sap Pool (Poison Hazard)');
+        }
+      }
+      if (setPieceTileOk(rx0 + 1, ry0 + 1)) setP(rx0 + 1, ry0 + 1, 'chest', 'Bloom-Husk Cache');
+      placeSetPieceEnemy('spore_hulk', [
+        { x: cx - 3, y: cy },
+        { x: cx, y: cy - 3 },
+      ]);
+      placeSetPieceEnemy('blight_weaver', [
+        { x: cx + 3, y: cy },
+        { x: cx, y: cy + 3 },
+      ]);
+    } else if (setPieceKind === 'rime_circle') {
+      // Rime Circle: a rimebound cache ringed by frost vents and pillars,
+      // watched by the revenants who froze mid-ritual.
+      paintRoomFloorTint(room, '#22384A');
+      for (const [px, py] of [
+        [cx - 2, cy - 2],
+        [cx + 2, cy - 2],
+        [cx - 2, cy + 2],
+        [cx + 2, cy + 2],
+      ]) {
+        if (setPieceDecorOk(px, py)) setP(px, py, 'pillar', 'Rime-Circle Pillar');
+      }
+      for (const [hx, hy] of [
+        [cx - 1, cy],
+        [cx + 1, cy],
+        [cx, cy - 1],
+        [cx, cy + 1],
+      ]) {
+        if (setPieceTileOk(hx, hy)) setP(hx, hy, 'frost_vent', 'Rime-Circle Vent (Chill Hazard)');
+      }
+      setP(cx, cy, 'chest', 'Rimebound Cache');
+      if (setPieceTileOk(cx, cy + 2)) setP(cx, cy + 2, 'lore_tablet', 'Rime-Circle Litany', `lore_floor_${depth}`);
+      if (setPieceTileOk(cx - 1, cy - 2)) setP(cx - 1, cy - 2, 'dart_trap');
+      placeSetPieceEnemy('rime_revenant', [
+        { x: cx - 3, y: cy },
+        { x: cx - 2, y: cy - 1 },
+      ]);
+      placeSetPieceEnemy('dread_wraith', [
+        { x: cx + 3, y: cy },
+        { x: cx + 2, y: cy + 1 },
+      ]);
+    } else {
+      // Sealed Brazier Hall (main descent): a treasure nook in the corner,
+      // its vault door bound to three Seal Braziers spread across the hall.
+      // Lighting all three (App: interactWithTile) grinds the seal open.
+      paintRoomFloorTint(room, '#3A2E28');
+      setP(rx0 + 1, ry0 + 1, 'chest', 'Sealed Reliquary Cache');
+      setP(rx0 + 2, ry0, 'wall');
+      setP(rx0 + 2, ry0 + 1, 'vault_door', 'Brazier-Sealed Door', 'seal_door');
+      setP(rx0, ry0 + 2, 'wall');
+      setP(rx0 + 1, ry0 + 2, 'wall');
+      setP(rx0 + 2, ry0 + 2, 'wall');
+      const brazierSpots = [
+        { x: rx0 + rw - 2, y: ry0 + 1 },
+        { x: rx0 + rw - 2, y: ry0 + rh - 2 },
+        { x: rx0 + 1, y: ry0 + rh - 2 },
+      ];
+      for (const s of brazierSpots) {
+        if (setPieceDecorOk(s.x, s.y)) setP(s.x, s.y, 'brazier', 'Seal Brazier', 'seal_brazier');
+      }
+      const guards: EnemyArchetype[] =
+        depth >= 6
+          ? ['obsidian_warden', 'dread_wraith']
+          : depth >= 4
+            ? ['iron_golem', 'shadow_stalker']
+            : ['crypt_skeleton', 'bone_acolyte'];
+      placeSetPieceEnemy(guards[0], [
+        { x: cx + 1, y: cy },
+        { x: cx, y: cy },
+      ]);
+      placeSetPieceEnemy(guards[1], [
+        { x: cx - 1, y: cy + 1 },
+        { x: cx, y: cy + 1 },
+      ]);
+    }
+  }
+
   // Add chests, healing braziers, lore tablets, traps
   const loot: GroundLoot[] = [];
   rooms.slice(1).forEach((room, idx) => {
     const roomIdx = idx + 1;
     const rx = room.x + 1 + Math.floor(Math.random() * Math.max(1, room.w - 2));
     const ry = room.y + 1 + Math.floor(Math.random() * Math.max(1, room.h - 2));
-    if (tiles[ry][rx].kind === 'floor' && !specialRoomIndices.has(roomIdx)) {
+    if (tiles[ry][rx].kind === 'floor' && !specialRoomIndices.has(roomIdx) && !setPieceRoomIndices.has(roomIdx)) {
       if (idx % 3 === 0) {
         tiles[ry][rx] = makeTile(rx, ry, 'chest');
       } else if (idx === 1) {
@@ -737,11 +998,14 @@ export function generateDungeonFloor(
         tiles[ry][rx] = makeTile(rx, ry, 'lore_tablet');
         tiles[ry][rx].interactId = `lore_floor_${depth}`;
       } else if (Math.random() < 0.45) {
-        tiles[ry][rx] = makeTile(rx, ry, 'trap');
+        // Phase 3: a second trap type — the Venom Dart Snare — joins the
+        // Spike Snare in the mix from depth 2 down.
+        const dart = depth >= 2 && Math.random() < 0.4;
+        tiles[ry][rx] = makeTile(rx, ry, dart ? 'dart_trap' : 'trap');
       }
     }
     // Scatter thematic floor biome hazards on open floor tiles
-    if (!specialRoomIndices.has(roomIdx) && Math.random() < 0.55) {
+    if (!specialRoomIndices.has(roomIdx) && !setPieceRoomIndices.has(roomIdx) && Math.random() < 0.55) {
       const hx = room.x + 1 + Math.floor(Math.random() * Math.max(1, room.w - 2));
       const hy = room.y + 1 + Math.floor(Math.random() * Math.max(1, room.h - 2));
       if (
@@ -779,6 +1043,7 @@ export function generateDungeonFloor(
 
   // Populate enemies
   const enemies: Enemy[] = [];
+  enemies.push(...setPieceEnemies);
   const pools: Record<number, EnemyArchetype[]> = {
     1: ['plague_rat', 'goblin_skirmisher', 'crypt_skeleton'],
     2: ['goblin_skirmisher', 'crypt_skeleton', 'bone_acolyte', 'blight_weaver'],
@@ -796,7 +1061,25 @@ export function generateDungeonFloor(
     'dread_wraith',
     'blight_weaver',
     'obsidian_warden',
+    // Phase 3: the side-dungeon archetypes also haunt the Endless Abyss.
+    'grave_husk',
+    'spore_hulk',
+    'rime_revenant',
   ];
+
+  // Phase 3: side dungeons draw from their own biome pools so each branch
+  // has a distinct roster (previously they reused the main depth pools).
+  const sidePools: Record<'barrow' | 'mire' | 'frost', EnemyArchetype[]> = {
+    barrow: ['crypt_skeleton', 'grave_husk', 'bone_acolyte', 'grave_husk', 'crypt_skeleton', 'plague_rat'],
+    mire: ['blight_weaver', 'spore_hulk', 'plague_rat', 'blight_weaver', 'spore_hulk', 'ash_cultist'],
+    frost: ['dread_wraith', 'rime_revenant', 'rime_revenant', 'iron_golem', 'obsidian_warden', 'cinder_wisp'],
+  };
+
+  const activePool: EnemyArchetype[] = options?.sideBranch
+    ? sidePools[options.sideBranch]
+    : depth >= 6
+      ? abyssPool
+      : (pools[depth] ?? pools[1]);
 
   let rareCount = 0;
   let roamingRandbossSpawned = false;
@@ -850,7 +1133,7 @@ export function generateDungeonFloor(
     }
 
     const count = 1 + (Math.random() < 0.65 ? 1 : 0) + (depth >= 3 && Math.random() < 0.35 ? 1 : 0);
-    const pool = depth >= 6 ? abyssPool : (pools[depth] ?? pools[1]);
+    const pool = activePool;
     for (let i = 0; i < count; i++) {
       const ex = room.x + 1 + Math.floor(Math.random() * Math.max(1, room.w - 2));
       const ey = room.y + 1 + Math.floor(Math.random() * Math.max(1, room.h - 2));
@@ -971,7 +1254,11 @@ export function generateDungeonFloor(
         item: generateInscription(depth + 1, { minRarity: depth >= 4 ? 'Epic' : 'Rare' }),
       });
 
-      const vaultPool = depth >= 6 ? abyssPool : (pools[depth] ?? pools[2]);
+      const vaultPool = options?.sideBranch
+        ? sidePools[options.sideBranch]
+        : depth >= 6
+          ? abyssPool
+          : (pools[depth] ?? pools[2]);
       const guardArch = vaultPool[Math.floor(Math.random() * vaultPool.length)];
       // P1: guard is created at the floor's own depth and only becomes a
       // randboss in the Abyss (depth >= 6), so a vault guard can no longer
@@ -1053,6 +1340,25 @@ export function generateDungeonFloor(
     reachable = getReachable(spawnPoint.x, spawnPoint.y);
   }
 
+  // Phase 3 ambient life: cave bats drift the galleries. Non-combat,
+  // non-blocking — they only ever stand on plain floor and flee the player.
+  const critters: CritterState[] = [];
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (Math.random() >= 0.65) continue;
+    const room = rooms[1 + Math.floor(Math.random() * Math.max(1, rooms.length - 1))];
+    if (!room) continue;
+    const bx = room.x + 1 + Math.floor(Math.random() * Math.max(1, room.w - 2));
+    const by = room.y + 1 + Math.floor(Math.random() * Math.max(1, room.h - 2));
+    if (
+      tiles[by]?.[bx]?.kind === 'floor' &&
+      (bx !== spawnPoint.x || by !== spawnPoint.y) &&
+      !enemies.some((e) => e.x === bx && e.y === by) &&
+      !critters.some((c) => c.x === bx && c.y === by)
+    ) {
+      critters.push(makeCritter('cave_bat', bx, by));
+    }
+  }
+
   const info =
     biomeNames[depth] ??
     (depth >= 6
@@ -1069,6 +1375,7 @@ export function generateDungeonFloor(
     tiles,
     enemies,
     npcs: [],
+    critters,
     loot,
     spawnPoint,
     returnPoint,
@@ -1104,12 +1411,14 @@ export function createThornwickMap(): ZoneMap {
     [
       { id: 'sylva', x: 16, y: 2, glyph: '@', color: '#34D399', name: 'Elder Sylva', title: 'Mire-Druid & Lorekeeper' },
       { id: 'bram', x: 9, y: 2, glyph: '@', color: '#FBBF24', name: 'Tinker Bram', title: 'Relic Scavenger' },
+      { id: 'fenwick', x: 18, y: 9, glyph: '@', color: '#4ADE80', name: 'Fenwick the Fisher', title: 'Fen Fisher', homeX: 18, homeY: 9, roams: true },
     ],
     { x: 2, y: 8 },
     { x: 2, y: 8 }
   );
   zone.tiles[8][0].interactId = 'gate_to_overworld';
   zone.tiles[8][0].label = 'Gate to Silverwood Vale';
+  zone.critters = [makeCritter('fen_frog', 20, 7), makeCritter('fen_frog', 12, 14)];
   return zone;
 }
 
@@ -1142,12 +1451,14 @@ export function createCinderwatchMap(): ZoneMap {
     [
       { id: 'halda', x: 6, y: 6, glyph: '@', color: '#FB923C', name: 'Forgemistress Halda', title: 'Master Runesmith' },
       { id: 'darek', x: 23, y: 6, glyph: '@', color: '#EF4444', name: 'Captain Darek', title: 'Rift Sentinel' },
+      { id: 'sella', x: 10, y: 10, glyph: '@', color: '#FDE68A', name: 'Sella the Quartermaster', title: 'Bastion Quartermaster', homeX: 10, homeY: 10, roams: true },
     ],
     { x: 14, y: 14 },
     { x: 14, y: 14 }
   );
   zone.tiles[16][14].interactId = 'gate_to_overworld';
   zone.tiles[16][14].label = 'Ridge Gate to Silverwood Vale';
+  zone.critters = [makeCritter('cinder_crow', 8, 10)];
   return zone;
 }
 
@@ -1217,6 +1528,22 @@ export function createOverworldMap(): ZoneMap {
 
   setTileMeta(15, 2, 'waystone', 'waystone_overworld', 'Silverwood Elven Waystone');
   setTileMeta(14, 14, 'lore_tablet', 'lore_overworld_vale', 'Silverbridge Crossroads Stele');
+
+  // Phase 3 POIs: quiet landmarks that reward a second look, never progress.
+  setTileMeta(13, 18, 'pillar', 'poi_standing_stones', 'Standing Stones of the Vale');
+  setTileMeta(15, 18, 'pillar', 'poi_standing_stones', 'Standing Stones of the Vale');
+  setTileMeta(14, 19, 'pillar', 'poi_standing_stones', 'Standing Stones of the Vale');
+  setTileMeta(14, 20, 'pillar', 'poi_standing_stones', 'Standing Stones of the Vale');
+  setTileMeta(33, 19, 'brazier', 'poi_hunter_camp', "Hunter's Cold Camp");
+  setTileMeta(24, 13, 'lore_tablet', 'lore_roadside_shrine', 'Roadside Shrine of the Vale');
+
+  // Phase 3 ambient life: Vale wildlife (non-combat, flees the player).
+  zone.critters = [
+    makeCritter('vale_rabbit', 6, 16),
+    makeCritter('vale_rabbit', 18, 20),
+    makeCritter('ash_fox', 27, 8),
+    makeCritter('cinder_crow', 30, 5),
+  ];
   setTileMeta(14, 10, 'brazier', 'brazier_overworld', 'Wayfarer Campfire');
   setTileMeta(38, 16, 'chest', 'overworld_satchel_chest', 'Brigand Tollhouse Chest');
   setTileMeta(44, 22, 'herb_node', 'herb_node', 'Pale Nightbloom');
@@ -1295,7 +1622,7 @@ export function generateSideDungeonFloor(
         ? 2 + floorNum
         : 3 + floorNum;
 
-  const zone = generateDungeonFloor(effectiveDepth, { skipStoryBoss: true });
+  const zone = generateDungeonFloor(effectiveDepth, { skipStoryBoss: true, sideBranch: branch });
   const zoneId = `${branch}_${floorNum}` as ZoneId;
   zone.id = zoneId;
 

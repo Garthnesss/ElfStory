@@ -950,7 +950,7 @@ export function getAnimatedFluidTile(
 }
 
 export function getSpecialStructureCanvas(
-  kind: Extract<TileKind, 'market_stall' | 'gate_city' | 'trap'>,
+  kind: Extract<TileKind, 'market_stall' | 'gate_city' | 'trap' | 'dart_trap'>,
   size: number,
   used = false
 ): HTMLCanvasElement {
@@ -1031,6 +1031,23 @@ export function getSpecialStructureCanvas(
       ctx.fillRect(sx, 11, 3, s - 20);
       ctx.fillStyle = tipCol;
       ctx.fillRect(sx + 1, 9, 1, 4);
+    }
+  } else if (kind === 'dart_trap') {
+    // Wall-mounted dart slit plate: dark housing, three venom-green dart tips.
+    ctx.fillStyle = '#1C1917';
+    ctx.fillRect(4, Math.floor(s / 2) - 5, s - 8, 10);
+    ctx.strokeStyle = '#44403C';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(4.5, Math.floor(s / 2) - 4.5, s - 9, 9);
+
+    const tipCol = used ? '#57534E' : '#A3E635';
+    const shaftCol = used ? '#44403C' : '#D6D3D1';
+    const ys = [Math.floor(s / 2) - 3, Math.floor(s / 2) - 1, Math.floor(s / 2) + 1];
+    for (const sy of ys) {
+      ctx.fillStyle = shaftCol;
+      ctx.fillRect(6, sy, s - 14, 1);
+      ctx.fillStyle = tipCol;
+      ctx.fillRect(s - 9, sy, 3, 1);
     }
   }
 

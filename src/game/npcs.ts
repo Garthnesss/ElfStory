@@ -95,6 +95,14 @@ export const QUEST_DEFS: Record<string, QuestDef> = {
     summary:
       'Conquer the 3 depths of Frostpeak & Ashen Caldera northeast of Cinderwatch and return Ignis-Warden Kaelthar’s Ashen Ore Heart to Halda.',
   },
+  deep_survey: {
+    id: 'deep_survey',
+    title: 'Charting the Deep Roads',
+    giver: 'Rowan the Wayfarer',
+    location: 'Silverwood Vale & the Sunken Vaults',
+    summary:
+      'No blade required: transcribe 6 carved steles (‡) scattered across towns, the Vale, and the vaults to finish Rowan’s survey of the deep roads.',
+  },
 };
 
 export const LORE_ENTRIES: Record<string, { title: string; text: string }> = {
@@ -161,6 +169,10 @@ export const LORE_ENTRIES: Record<string, { title: string; text: string }> = {
   lore_frost: {
     title: 'Frostpeak Miner’s Warning',
     text: '"Ice above, ember below. Carry healing draughts and clear the rime vents carefully before facing the Caldera Warden."',
+  },
+  lore_roadside_shrine: {
+    title: 'Roadside Shrine of the Vale',
+    text: '"For the road that watches back. Travelers leave a copper, a crust, or a confession — the Vale accepts all three currencies." Weathered offerings crowd the shrine’s base: bent nails, bird skulls, one very small boot.',
   },
 };
 
@@ -1041,6 +1053,18 @@ export const NPCS: Record<string, NpcDef> = {
             nextNodeId: 'brigand_complete',
           },
           {
+            id: 'ask_survey',
+            label: 'Ask about the carved steles (‡) across the realm.',
+            condition: { questId: 'deep_survey', questStatus: undefined },
+            nextNodeId: 'survey_intro',
+          },
+          {
+            id: 'turn_in_survey',
+            label: 'Report the completed Deep Roads survey (+60g, +120 XP, Star-Compass)',
+            condition: { questId: 'deep_survey', questStatus: 'active', questMinStage: 6 },
+            nextNodeId: 'survey_complete',
+          },
+          {
             id: 'scout_tip',
             label: '[Agility 3] Ask for covert overworld trails.',
             check: { attribute: 'agility', threshold: 3 },
@@ -1091,6 +1115,43 @@ export const NPCS: Record<string, NpcDef> = {
                 rewardItemTag: 'silverbridge_band',
               },
             ],
+            nextNodeId: 'root',
+          },
+        ],
+      },
+      survey_intro: {
+        id: 'survey_intro',
+        text: '"The old roads are written down, outrider — on carved steles (‡), one in every town and scattered through the vaults. Transcribe six of them for my survey and the deep roads will never lose you. No blood price. Just boot leather and literacy."',
+        choices: [
+          {
+            id: 'accept_survey',
+            label: 'I will chart the deep roads (read 6 carved steles).',
+            action: {
+              type: 'start_quest',
+              questId: 'deep_survey',
+              log: 'Rowan commissioned a survey of the deep roads: transcribe 6 carved steles (‡) across the realm.',
+            },
+            nextNodeId: 'root',
+          },
+          { id: 'back', label: 'Back', nextNodeId: 'root' },
+        ],
+      },
+      survey_complete: {
+        id: 'survey_complete',
+        text: '"Six steles, faithfully copied!" Rowan inks your transcriptions into a vellum road-chart, then unhooks the star-compass from his own cloak. "Take it. Its needle points at the nearest unread stele — a surveyor’s sixth sense."',
+        choices: [
+          {
+            id: 'finish_survey',
+            label: 'Accept the Surveyor’s Star-Compass (+60g, +120 XP)',
+            action: {
+              type: 'complete_quest',
+              questId: 'deep_survey',
+              outcomeLabel: 'Charted the Deep Roads',
+              log: 'Transcribed 6 carved steles across the realm and completed Rowan’s survey of the deep roads.',
+              rewardGold: 60,
+              rewardXp: 120,
+              rewardItemTag: 'surveyor_compass',
+            },
             nextNodeId: 'root',
           },
         ],
@@ -1422,6 +1483,135 @@ export const NPCS: Record<string, NpcDef> = {
         id: 'respec_done',
         text: 'Darek drills your stance on the basalt ramparts. All Attribute and Skill Points have been refunded for reallocation.',
         choices: [{ id: 'back', label: 'Ready.', nextNodeId: 'root' }],
+      },
+    },
+  },
+
+  // ---------------------------------------------------------------------
+  // Phase 3 ambient townsfolk — no quests, just local colour. They wander
+  // a few tiles around their posts (see NpcPlacement.roams in world.ts).
+  // ---------------------------------------------------------------------
+  pell: {
+    id: 'pell',
+    name: 'Pell the Carter',
+    title: 'Outpost Carter',
+    glyph: '@',
+    color: '#A8A29E',
+    zone: 'oakhaven',
+    portrait: [
+      { text: '    _______    ', color: '#A8A29E' },
+      { text: '   / o   o \\   ', color: '#E2E8F0' },
+      { text: '  |   ___   |  ', color: '#CBD5E1' },
+      { text: '   \\_______/   ', color: '#78716C' },
+      { text: '  /|==| |==|\\  ', color: '#92400E' },
+      { text: '   |  | |  |   ', color: '#475569' },
+    ],
+    rootNodeId: 'root',
+    nodes: {
+      root: {
+        id: 'root',
+        text: 'Pell is re-shoeing his mule and cursing the cart axle in three languages. "Hauls ore up from the gate, stories down from the Vale. Stories pay worse, weigh less. Mind the mule — she bites critics."',
+        choices: [{ id: 'leave', label: 'Leave him to the axle.', action: { type: 'close_dialogue' } }],
+      },
+    },
+  },
+
+  wren: {
+    id: 'wren',
+    name: 'Sister Wren',
+    title: 'Shrine Keeper',
+    glyph: '@',
+    color: '#FDE68A',
+    zone: 'oakhaven',
+    portrait: [
+      { text: '    .-----.    ', color: '#FDE68A' },
+      { text: '   / o   o \\   ', color: '#FEF3C7' },
+      { text: '  |   \\_/   |  ', color: '#FDE68A' },
+      { text: '   \\_______/   ', color: '#B45309' },
+      { text: '  /|  |*|  |\\  ', color: '#F59E0B' },
+      { text: '   |  | |  |   ', color: '#475569' },
+    ],
+    rootNodeId: 'root',
+    nodes: {
+      root: {
+        id: 'root',
+        text: 'Sister Wren tends a row of shrine candles that never quite go out. "Blessings are free, delver. Candles cost a copper. The Outpost runs on priorities." She glances at the Old Oak. "It was old when the Outpost was young. Leave it a kind word when you pass."',
+        choices: [{ id: 'leave', label: 'Bow and go.', action: { type: 'close_dialogue' } }],
+      },
+    },
+  },
+
+  tomas: {
+    id: 'tomas',
+    name: 'Page Tomas',
+    title: 'Citadel Page',
+    glyph: '@',
+    color: '#93C5FD',
+    zone: 'highspire',
+    portrait: [
+      { text: '    /^^^^^\\    ', color: '#93C5FD' },
+      { text: '   / o   o \\   ', color: '#E2E8F0' },
+      { text: '  |   \\o/   |  ', color: '#BFDBFE' },
+      { text: '   \\_______/   ', color: '#2563EB' },
+      { text: '  /|__|▤|__|\\  ', color: '#D97706' },
+      { text: '   |  | |  |   ', color: '#475569' },
+    ],
+    rootNodeId: 'root',
+    nodes: {
+      root: {
+        id: 'root',
+        text: 'Page Tomas skids to a halt, scrolls bundled under both arms. "Messages, maps, and misplaced magistrates — that’s my whole job! I know every stair in Highspire. Fallen down most of them, too. Archivist Lyra’s archive is north, if you’re hunting reading."',
+        choices: [{ id: 'leave', label: 'Let him run.', action: { type: 'close_dialogue' } }],
+      },
+    },
+  },
+
+  fenwick: {
+    id: 'fenwick',
+    name: 'Fenwick the Fisher',
+    title: 'Fen Fisher',
+    glyph: '@',
+    color: '#4ADE80',
+    zone: 'thornwick',
+    portrait: [
+      { text: '   _________   ', color: '#4ADE80' },
+      { text: '  /  o   o  \\  ', color: '#DCFCE7' },
+      { text: '  |   \\_/   |  ', color: '#86EFAC' },
+      { text: '   \\_______/   ', color: '#166534' },
+      { text: '  /|  |~|  |\\  ', color: '#0EA5E9' },
+      { text: '   |  | |  |   ', color: '#475569' },
+    ],
+    rootNodeId: 'root',
+    nodes: {
+      root: {
+        id: 'root',
+        text: 'Fenwick holds up today’s catch: a boot. "Yesterday: a boot. The fen gives what the fen gives." He nods toward the frogs. "When they sing, the Hollow’s calm. When they stop — that’s when you wade careful."',
+        choices: [{ id: 'leave', label: 'Tight lines.', action: { type: 'close_dialogue' } }],
+      },
+    },
+  },
+
+  sella: {
+    id: 'sella',
+    name: 'Sella the Quartermaster',
+    title: 'Bastion Quartermaster',
+    glyph: '@',
+    color: '#FDE68A',
+    zone: 'cinderwatch',
+    portrait: [
+      { text: '    /=====\\    ', color: '#FDE68A' },
+      { text: '   / o   o \\   ', color: '#E2E8F0' },
+      { text: '  |   \\_/   |  ', color: '#FDE68A' },
+      { text: '   \\_______/   ', color: '#B45309' },
+      { text: '  /|==|▤|==|\\  ', color: '#92400E' },
+      { text: '   |  | |  |   ', color: '#475569' },
+    ],
+    rootNodeId: 'root',
+    nodes: {
+      root: {
+        id: 'root',
+        text: 'Sella is chalking inventory onto a basalt slab. "Rations, rope, rime-wool. If it isn’t on my list, it isn’t in the Bastion. The mountain provides the rest — rudely, and usually on fire."',
+        choices: [{ id: 'leave', label: 'Salute the list.', action: { type: 'close_dialogue' } }],
       },
     },
   },

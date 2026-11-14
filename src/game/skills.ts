@@ -366,6 +366,8 @@ export function getEquippedSetCounts(player: PlayerState): Record<RelicSetId, nu
   const counts: Record<RelicSetId, number> = {
     starlight_outrider: 0,
     cinderforged: 0,
+    thornbound: 0,
+    rimebound: 0,
   };
   for (const item of Object.values(player.equipped)) {
     if (item?.setId) {
@@ -455,6 +457,18 @@ export function computeDerivedStats(player: PlayerState, worldFlags?: WorldFlags
     spellPower += 6;
     thorns += 6;
     maxHp += 15;
+  }
+  if (activeSets.includes('thornbound')) {
+    atk += 3;
+    thorns += 4;
+    lifesteal += 3;
+    maxHp += 12;
+  }
+  if (activeSets.includes('rimebound')) {
+    def += 5;
+    dodgeChance += 8;
+    maxMana += 10;
+    maxHp += 8;
   }
 
   if (player.companion && player.companion.hp > 0 && player.companion.stance !== 'recall') {

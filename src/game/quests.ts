@@ -56,6 +56,13 @@ export function getQuestNextHint(q: QuestProgress, worldFlags: WorldFlags): stri
     }
     return 'Next: Conquer Frostpeak & Ashen Caldera (3 floors) northeast of Cinderwatch and slay Ignis-Warden Kaelthar.';
   }
+  if (q.id === 'deep_survey') {
+    const read = Math.min(6, worldFlags.readLoreIds.length);
+    if (q.stage >= 6 || read >= 6) {
+      return 'Next: Report your completed survey to Rowan at Silverbridge Camp in Silverwood Vale.';
+    }
+    return `Next: Transcribe carved steles (‡) in towns, the Vale, and the vaults (${read}/6 read).`;
+  }
   return 'Follow leads across Oakhaven, Silverwood Vale, Thornwick Fen, Cinderwatch, and Highspire.';
 }
 

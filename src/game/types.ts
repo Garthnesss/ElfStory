@@ -39,6 +39,7 @@ export type TileKind =
   | 'brazier'
   | 'chest'
   | 'trap'
+  | 'dart_trap'
   | 'lore_tablet'
   | 'tree'
   | 'pillar'
@@ -180,7 +181,7 @@ export interface ProdigyDef {
   effectNote: string;
 }
 
-export type RelicSetId = 'starlight_outrider' | 'cinderforged';
+export type RelicSetId = 'starlight_outrider' | 'cinderforged' | 'thornbound' | 'rimebound';
 
 export type RuneEnchantId = 'keen_edge' | 'ward_plate' | 'aether_core' | 'vital_heart' | 'swift_wind';
 
@@ -257,6 +258,9 @@ export type EnemyArchetype =
   | 'dread_wraith'
   | 'blight_weaver'
   | 'obsidian_warden'
+  | 'grave_husk'
+  | 'spore_hulk'
+  | 'rime_revenant'
   | 'boss_bone_cantor'
   | 'boss_ashen_inquisitor'
   | 'boss_malakor';
@@ -292,6 +296,8 @@ export interface Enemy {
   skillLoadout?: SkillId[];
   skillCooldowns?: Partial<Record<SkillId, number>>;
   runeCharge?: boolean;
+  /** Phase 3: Grave Husk "Deathless" — set once its one free death-cheat is spent. */
+  undyingUsed?: boolean;
   statuses: StatusEffect[];
   intent?: EnemyIntent;
   alerted: boolean;
@@ -315,6 +321,28 @@ export interface NpcPlacement {
   color: string;
   name: string;
   title: string;
+  /** Phase 3 ambient life: post the NPC idles around (defaults to spawn x/y). */
+  homeX?: number;
+  homeY?: number;
+  /** Phase 3 ambient life: ambient townsfolk wander a few tiles from their post. */
+  roams?: boolean;
+}
+
+export type CritterKind = 'vale_rabbit' | 'ash_fox' | 'cinder_crow' | 'cave_bat' | 'town_cat' | 'fen_frog';
+
+/** Phase 3 ambient life: non-combat, non-blocking wildlife. Never interacts
+ *  with combat, pathing or quests; persisted as plain zone data and safely
+ *  absent (undefined) in older saves. */
+export interface CritterState {
+  id: string;
+  kind: CritterKind;
+  name: string;
+  glyph: string;
+  color: string;
+  x: number;
+  y: number;
+  homeX: number;
+  homeY: number;
 }
 
 export interface ZoneMap {
@@ -328,6 +356,8 @@ export interface ZoneMap {
   tiles: Tile[][];
   enemies: Enemy[];
   npcs: NpcPlacement[];
+  /** Phase 3 ambient life: optional so pre-Phase-3 saves hydrate unchanged. */
+  critters?: CritterState[];
   loot: GroundLoot[];
   spawnPoint: { x: number; y: number };
   returnPoint: { x: number; y: number };

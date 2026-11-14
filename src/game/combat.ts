@@ -155,6 +155,7 @@ export function chooseEnemyIntent(enemy: Enemy, player: PlayerState, zone: ZoneM
   if (
     (enemy.archetype === 'iron_golem' ||
       enemy.archetype === 'obsidian_warden' ||
+      enemy.archetype === 'spore_hulk' ||
       enemy.archetype === 'boss_ashen_inquisitor' ||
       enemy.archetype === 'boss_malakor') &&
     dist <= 2 &&
@@ -173,7 +174,12 @@ export function chooseEnemyIntent(enemy: Enemy, player: PlayerState, zone: ZoneM
     }
     return {
       type: 'ground_slam',
-      label: enemy.archetype === 'obsidian_warden' ? 'Winding up Obsidian Cleave' : 'Winding up Ground Slam',
+      label:
+        enemy.archetype === 'obsidian_warden'
+          ? 'Winding up Obsidian Cleave'
+          : enemy.archetype === 'spore_hulk'
+            ? 'Swelling Spore Slam'
+            : 'Winding up Ground Slam',
       damage: Math.round(enemy.atk * 1.55 * dmgScale),
       targetTiles: targets,
     };
@@ -183,6 +189,7 @@ export function chooseEnemyIntent(enemy: Enemy, player: PlayerState, zone: ZoneM
     (enemy.archetype === 'bone_acolyte' ||
       enemy.archetype === 'ash_cultist' ||
       enemy.archetype === 'blight_weaver' ||
+      enemy.archetype === 'rime_revenant' ||
       enemy.archetype === 'boss_bone_cantor' ||
       enemy.archetype === 'boss_malakor') &&
     dist >= 2 &&
@@ -192,7 +199,12 @@ export function chooseEnemyIntent(enemy: Enemy, player: PlayerState, zone: ZoneM
   ) {
     return {
       type: 'hex_bolt',
-      label: enemy.archetype === 'blight_weaver' ? 'Weaving Venom Hex' : 'Charging Hex Bolt',
+      label:
+        enemy.archetype === 'blight_weaver'
+          ? 'Weaving Venom Hex'
+          : enemy.archetype === 'rime_revenant'
+            ? 'Charging Rime Bolt'
+            : 'Charging Hex Bolt',
       damage: Math.round(enemy.atk * 1.25 * dmgScale),
       targetTiles: [{ x: player.x, y: player.y }],
     };
@@ -202,13 +214,19 @@ export function chooseEnemyIntent(enemy: Enemy, player: PlayerState, zone: ZoneM
     (enemy.archetype === 'goblin_skirmisher' ||
       enemy.archetype === 'crypt_skeleton' ||
       enemy.archetype === 'shadow_stalker' ||
+      enemy.archetype === 'grave_husk' ||
       enemy.archetype === 'dread_wraith') &&
     dist === 1 &&
     Math.random() < 0.38
   ) {
     return {
       type: 'heavy_windup',
-      label: enemy.archetype === 'dread_wraith' ? 'Channeling Soul Chill' : 'Telegraphing Heavy Strike',
+      label:
+        enemy.archetype === 'dread_wraith'
+          ? 'Channeling Soul Chill'
+          : enemy.archetype === 'grave_husk'
+            ? 'Raising a Tomb-Cleaver Blow'
+            : 'Telegraphing Heavy Strike',
       damage: Math.round(enemy.atk * 1.45 * dmgScale),
       targetTiles: [{ x: player.x, y: player.y }],
     };
@@ -455,7 +473,7 @@ export function findAutoExploreTarget(
           const c2 = zone.tiles[ny]?.[cur.x];
           if (!c1?.explored || !c1.walkable || !c2?.explored || !c2.walkable) continue;
         }
-        if (tile.kind === 'trap' && tile.revealed && !tile.used) continue;
+        if ((tile.kind === 'trap' || tile.kind === 'dart_trap') && tile.revealed && !tile.used) continue;
         if (
           (tile.kind === 'spore_pool' ||
             tile.kind === 'frost_vent' ||

@@ -124,6 +124,7 @@ import {
   ZoneId,
   ZoneMap,
 } from './game/types';
+import { pickAmbientBark, pickDungeonAmbience, stepCritters, stepNpcWander } from './game/ambient';
 import { createInitialZones, generateDungeonFloor, generateZoneById, getZoneContext } from './game/world';
 
 const LEGACY_SAVE_KEY = 'ashen_glyph_save_v1';
@@ -1398,6 +1399,36 @@ export default function App() {
       flagsOverride?: WorldFlags
     ): { nextPlayer: PlayerState; nextZone: ZoneMap; nextFlags: WorldFlags; victoryTriggered: boolean } => {
       const baseFlags = flagsOverride ?? worldFlags;
+
+      // Phase 3: Grave Husk "Deathless" — the first killing blow does not
+      // take it. Every death in the game funnels through this handler, so
+      // the cheat lives here: revive at 30% HP with no kill credit, no
+      // bestiary tick, and no loot. (runEnemyTurns call sites restore the
+      // revived husk to their survivor set via restoreCheatedDeath.)
+      if (enemy.archetype === 'grave_husk' && !enemy.undyingUsed) {
+        const revived: Enemy = {
+          ...enemy,
+          hp: Math.max(1, Math.round(enemy.maxHp * 0.3)),
+          undyingUsed: true,
+          alerted: true,
+          intent: undefined,
+        };
+        const nextZone: ZoneMap = {
+          ...zone,
+          enemies: zone.enemies.map((e) => (e.id === enemy.id ? revived : e)),
+          loot: [...zone.loot],
+        };
+        soundEngine.playSpell();
+        spawnBurst(enemy.x, enemy.y, '#D97706', '✦', 9);
+        spawnFloating(enemy.x, enemy.y, 'DEATHLESS!', '#D97706');
+        pushLog(
+          `The Grave Husk refuses death — burial oaths knit it back together (${revived.hp} HP)!`,
+          'danger',
+          p.turnsElapsed
+        );
+        return { nextPlayer: { ...p }, nextZone, nextFlags: baseFlags, victoryTriggered: false };
+      }
+
       const prevKills = baseFlags.bestiaryKills?.[enemy.archetype] ?? 0;
       const newSpeciesKills = prevKills + 1;
       let nextFlags: WorldFlags = {
@@ -1463,6 +1494,27 @@ export default function App() {
       }
       if (hasAffix(nextP, 'mana_on_kill')) {
         nextP.mana = Math.min(derivedNow.maxMana, nextP.mana + 4);
+      }
+
+      // Phase 3: Spore Hulk death-burst — its pressurized spore cap
+      // ruptures on death, punishing point-blank kills.
+      if (enemy.archetype === 'spore_hulk') {
+        spawnBurst(enemy.x, enemy.y, '#84CC16', '*', 12);
+        if (chebyshev(nextP.x, nextP.y, enemy.x, enemy.y) <= 1) {
+          const burstDmg = 6 + zone.depth * 2;
+          nextP = { ...nextP, statuses: [...nextP.statuses] };
+          nextP.hp -= burstDmg;
+          applyStatus(nextP.statuses, 'poison', 3, 3);
+          triggerShake(150);
+          spawnFloating(nextP.x, nextP.y, `-${burstDmg} BURST`, '#84CC16');
+          pushLog(
+            `The Spore Hulk BURSTS for ${burstDmg} dmg and Poison (3t)!`,
+            'danger',
+            nextP.turnsElapsed
+          );
+        } else {
+          pushLog('The Spore Hulk bursts in a green cloud — you kept your distance.', 'combat', nextP.turnsElapsed);
+        }
       }
 
       // Drop loot
@@ -1668,10 +1720,32 @@ export default function App() {
           statuses: e.statuses.map((s) => ({ ...s })),
           skillCooldowns: e.skillCooldowns ? { ...e.skillCooldowns } : undefined,
         })),
+        npcs: startZone.npcs.map((n) => ({ ...n })),
+        critters: (startZone.critters ?? []).map((c) => ({ ...c })),
         loot: [...startZone.loot],
       };
 
+      // Phase 3 ambient life: critters drift/flee every turn (cheap, bounded
+      // by the handful of critters per zone); dungeon flavour lines are rare.
+      if (curZ.critters && curZ.critters.length > 0) {
+        curZ.critters = stepCritters(curZ.critters, curZ, curP);
+      }
+      if (curZ.id === 'overworld' && curP.turnsElapsed % 11 === 0) {
+        const bark = pickAmbientBark(curZ, curP);
+        if (bark) pushLog(`${bark.npc.name}: “${bark.line}”`, 'neutral', curP.turnsElapsed);
+      } else if (!curZ.isTown && curZ.depth >= 1 && Math.random() < 0.03) {
+        const amb = pickDungeonAmbience(curZ);
+        if (amb) pushLog(amb, 'neutral', curP.turnsElapsed);
+      }
+
       if (curZ.isTown) {
+        // Phase 3 ambient life: townsfolk wander a few tiles from their
+        // posts, and nearby townsfolk trade bark lines now and then.
+        curZ.npcs = stepNpcWander(curZ.npcs, curZ, curP);
+        if (curP.turnsElapsed % 11 === 0) {
+          const bark = pickAmbientBark(curZ, curP);
+          if (bark) pushLog(`${bark.npc.name}: “${bark.line}”`, 'neutral', curP.turnsElapsed);
+        }
         const d = computeDerivedStats(curP, activeFlags);
         curP.mana = Math.min(d.maxMana, curP.mana + 2);
         if (curP.companion) {
@@ -1770,6 +1844,17 @@ export default function App() {
 
       const survivingIds = new Set(curZ.enemies.map((e) => e.id));
 
+      // Phase 3: handleEnemyDeath can refuse a Grave Husk's first death
+      // (Deathless). When the "corpse" is still on the returned board, it
+      // never died — restore it to the board and the survivor set.
+      const restoreCheatedDeath = (res: { nextZone: ZoneMap }, fallen: Enemy) => {
+        const revived = res.nextZone.enemies.find((e) => e.id === fallen.id);
+        if (!revived) return;
+        survivingIds.add(fallen.id);
+        const idx = curZ.enemies.findIndex((e) => e.id === fallen.id);
+        if (idx >= 0) curZ.enemies[idx] = revived;
+      };
+
       // Companion Turn Simulation
       if (!playerDied && curP.companion) {
         const comp = curP.companion;
@@ -1851,6 +1936,7 @@ export default function App() {
                 curZ.loot = res.nextZone.loot;
                 activeFlags = res.nextFlags;
                 if (res.victoryTriggered) victoryTriggered = true;
+                restoreCheatedDeath(res, adjTarget);
               }
             } else {
               const pursueTarget = liveEnemies
@@ -1925,6 +2011,7 @@ export default function App() {
             curZ.loot = res.nextZone.loot;
             activeFlags = res.nextFlags;
             if (res.victoryTriggered) victoryTriggered = true;
+            restoreCheatedDeath(res, enemy);
             continue;
           }
         }
@@ -2047,6 +2134,10 @@ export default function App() {
               else if (intentSkill === 'frost_nova') tryApplyPlayerAilment('chilled', 2, 1);
               else if (intentSkill === 'cleave') tryApplyPlayerAilment('bleed', 2, 3);
               else if (intentSkill === 'shield_bash') tryApplyPlayerAilment('chilled', 1, 1);
+              else if (intentType === 'hex_bolt' && enemy.archetype === 'rime_revenant') {
+                // Phase 3: Rime Revenant bolts carry Frostpeak's chill.
+                tryApplyPlayerAilment('chilled', 2, 1);
+              }
 
               if (checkPlayerFatal()) {
                 playerDied = true;
@@ -2094,6 +2185,7 @@ export default function App() {
                 curZ.loot = res.nextZone.loot;
                 activeFlags = res.nextFlags;
                 if (res.victoryTriggered) victoryTriggered = true;
+                restoreCheatedDeath(res, enemy);
               }
             }
           } else {
@@ -2124,6 +2216,7 @@ export default function App() {
                 curZ.loot = res.nextZone.loot;
                 activeFlags = res.nextFlags;
                 if (res.victoryTriggered) victoryTriggered = true;
+                restoreCheatedDeath(res, enemy);
               }
             }
 
@@ -2474,6 +2567,42 @@ export default function App() {
       if (!tile) return false;
       const mergedZones: Record<ZoneId, ZoneMap> = { ...zones, [z.id]: z };
 
+      // Phase 3 POIs: quiet landmarks — a line of flavor and a tiny one-time
+      // discovery. They never gate progress.
+      if (tile.interactId === 'poi_standing_stones' || tile.interactId === 'poi_old_oak') {
+        const isStones = tile.interactId === 'poi_standing_stones';
+        if (tile.used) {
+          pushLog(
+            isStones
+              ? 'The Standing Stones hum faintly under your palm. Whatever listened has heard you.'
+              : 'The Old Oak creaks in the wind off the Vale. It has heard everything twice.',
+            'neutral'
+          );
+          return true;
+        }
+        tile.used = true;
+        soundEngine.playQuill();
+        const dust = isStones ? 3 : 2;
+        setPlayer({ ...p, glyphDust: p.glyphDust + dust });
+        setZones((prev) => ({ ...prev, [z.id]: { ...z } }));
+        spawnFloating(tx, ty, `+${dust} DUST`, '#FBBF24');
+        pushLog(
+          isStones
+            ? `Discovery: Standing Stones of the Vale (+${dust} Glyph Dust).`
+            : `Discovery: The Old Outpost Oak (+${dust} Glyph Dust).`,
+          'loot'
+        );
+        setSpecialPrompt({
+          title: isStones ? 'Standing Stones of the Vale' : 'The Old Outpost Oak',
+          subtitle: isStones ? 'Silverwood Vale · Pre-Citadel Landmark' : 'Oakhaven Outpost · Living Landmark',
+          body: isStones
+            ? 'Four wind-scoured stones lean together over a hollow worn smooth by offerings. The carvings are older than the Citadel and face, all of them, slightly downhill — toward the Sunken Reliquary. A surveyor’s notch at the base reads: "The roads were deep before they were dark."'
+            : 'The Old Oak was old when Oakhaven was young. Delvers nail their first copper to its trunk for luck; the bark has long since grown over a fortune in small hopes. Sister Wren swears it leans a little more toward the Reliquary stair every year.',
+          options: [{ id: 'ok', label: 'Step back', tone: 'primary', onSelect: () => setSpecialPrompt(null) }],
+        });
+        return true;
+      }
+
       if (tile.kind === 'stairs_down') {
         if (z.id === 'oakhaven') {
           transitionToZone('dungeon_1', 'spawn', p, mergedZones);
@@ -2666,6 +2795,29 @@ export default function App() {
         }
       }
 
+      if (tile.kind === 'vault_door' && tile.interactId === 'seal_door') {
+        // Phase 3 set piece: this door is bound to the room's Seal Braziers.
+        // Lighting the last brazier opens it automatically (brazier branch
+        // below), so reaching this prompt means the seal still holds.
+        const sealBraziers = z.tiles.flat().filter((t) => t.interactId === 'seal_brazier');
+        const litCount = sealBraziers.filter((t) => t.used).length;
+        soundEngine.playDoor();
+        setSpecialPrompt({
+          title: 'Brazier-Sealed Door',
+          subtitle: `Depth ${z.depth} · Seal Brazier Hall`,
+          body: `Rune-chains bind this door to the hall's Seal Braziers (☼). ${litCount}/${sealBraziers.length} burn so far — light every Seal Brazier in this hall and the seal will grind open on its own.`,
+          options: [
+            {
+              id: 'leave_seal_door',
+              label: 'Step away',
+              tone: 'secondary',
+              onSelect: () => setSpecialPrompt(null),
+            },
+          ],
+        });
+        return true;
+      }
+
       if (tile.kind === 'vault_door') {
         soundEngine.playDoor();
         setSpecialPrompt({
@@ -2793,7 +2945,40 @@ export default function App() {
         setPlayer(nextP);
         setZones((prev) => ({ ...prev, [z.id]: { ...z } }));
         spawnFloating(tx, ty, 'RESTORED', '#4EA885');
-        pushLog('Warm brazier embers mend your wounds and refill your mana.', 'arcane');
+        if (tile.interactId === 'seal_brazier') {
+          // Phase 3 set piece: track the hall's Seal Braziers; lighting the
+          // last one grinds the Brazier-Sealed Door open.
+          const sealBraziers = z.tiles.flat().filter((t) => t.interactId === 'seal_brazier');
+          const litCount = sealBraziers.filter((t) => t.used).length;
+          if (litCount >= sealBraziers.length && sealBraziers.length > 0) {
+            const updatedTiles = z.tiles.map((row) => row.map((t) => ({ ...t })));
+            let opened = false;
+            for (const row of updatedTiles) {
+              for (const t of row) {
+                if (t.interactId === 'seal_door' && t.kind === 'vault_door') {
+                  t.kind = 'door';
+                  t.glyph = '+';
+                  t.walkable = true;
+                  t.blocksSight = false;
+                  t.used = true;
+                  t.label = 'Unsealed Reliquary Door';
+                  opened = true;
+                }
+              }
+            }
+            if (opened) {
+              setZones((prev) => ({ ...prev, [z.id]: { ...z, tiles: updatedTiles } }));
+              triggerShake(130);
+              pushLog('The last Seal Brazier catches — somewhere in the hall, a rune-seal grinds open!', 'quest');
+            }
+          } else {
+            pushLog(`Seal Brazier lit (${litCount}/${sealBraziers.length}). Its warmth restores you as the seal weakens.`, 'arcane');
+          }
+        } else if (tile.interactId === 'poi_hunter_camp') {
+          pushLog("A hunter's cold camp, recently left: cold ash, a skinned rabbit, and a note — 'Fox took the good snare. Vale provides.' The banked embers still mend you.", 'neutral');
+        } else {
+          pushLog('Warm brazier embers mend your wounds and refill your mana.', 'arcane');
+        }
         return true;
       }
 
@@ -2868,6 +3053,28 @@ export default function App() {
           setPlayer(featRes.nextPlayer);
           setZones(mergedZones);
           setWorldFlags(featRes.nextFlags);
+          // Phase 3 survey quest: progress is the count of unique steles
+          // transcribed (WorldFlags.readLoreIds); stage mirrors it (cap 6).
+          setQuests((prev) => {
+            const cur = prev.deep_survey;
+            if (!cur || cur.status !== 'active') return prev;
+            const readCount = Math.min(6, updatedFlags.readLoreIds.length);
+            const nextStage = Math.max(cur.stage, readCount);
+            if (nextStage === cur.stage) return prev;
+            return {
+              ...prev,
+              deep_survey: {
+                ...cur,
+                stage: nextStage,
+                history: [
+                  ...cur.history,
+                  nextStage >= 6
+                    ? 'Survey complete: 6 steles transcribed. Return to Rowan at Silverbridge Camp.'
+                    : `Transcribed a carved stele (${readCount}/6 for Rowan’s survey).`,
+                ],
+              },
+            };
+          });
           setSpecialPrompt({
             title: entry.title,
             subtitle: 'Carved Stele Inscription',
@@ -3880,6 +4087,27 @@ export default function App() {
         }
       }
 
+      // Phase 3: Venom Dart Snare — wall-mounted, harder to spot than a
+      // floor snare (Agility 4+), and its darts carry venom.
+      if (tile.kind === 'dart_trap' && !tile.used) {
+        if (nextP.attributes.agility >= 4 && !tile.revealed) {
+          tile.revealed = true;
+          tile.used = true;
+          spawnFloating(tx, ty, 'DISARMED', '#4EA885');
+          pushLog('Your agility spotted the dart slits and jammed the Venom Dart Snare!', 'combat');
+        } else {
+          tile.revealed = true;
+          tile.used = true;
+          const dartDmg = 4 + nextZ.depth * 2;
+          nextP.hp -= dartDmg;
+          applyStatus(nextP.statuses, 'poison', 3, 3);
+          soundEngine.playTrap();
+          triggerShake(130);
+          spawnFloating(tx, ty, `-${dartDmg} DART`, '#A3E635');
+          pushLog(`Venom darts hiss from the wall for ${dartDmg} dmg and Poison (3t)!`, 'danger');
+        }
+      }
+
       // Check Biome Hazards (spore_pool, frost_vent, ember_crust, shock_rune)
       if (
         !tile.used &&
@@ -4679,7 +4907,12 @@ export default function App() {
             [act.questId]: {
               id: act.questId,
               status: 'active',
-              stage: 1,
+              // Phase 3: the survey quest counts steles already transcribed
+              // before it was accepted, so prior reading is never wasted.
+              stage:
+                act.questId === 'deep_survey'
+                  ? Math.max(1, Math.min(6, nextFlags.readLoreIds.length))
+                  : 1,
               history: [act.log],
             },
           }));

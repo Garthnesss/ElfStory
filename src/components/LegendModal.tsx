@@ -20,6 +20,8 @@ const TILE_ITEMS = [
   { glyph: '$', color: 'text-amber-300', name: 'Ironbound Chest', desc: 'Contains gold, draughts, Inscriptions, and procedural Uncommon+ equipment.' },
   { glyph: '‡', color: 'text-violet-300', name: 'Carved Stele', desc: 'Ancient inscription revealing lore and tactical dungeon hints.' },
   { glyph: '^', color: 'text-rose-400', name: 'Spike Snare', desc: 'Hidden floor trap. Agility 3+ automatically spots and disarms snares.' },
+  { glyph: '»', color: 'text-lime-400', name: 'Venom Dart Snare', desc: 'Wall-mounted dart trap (Depth 2+). Harder to spot — Agility 4+ disarms it; its darts deal damage and Poison (3t).' },
+  { glyph: '☼', color: 'text-amber-400', name: 'Seal Brazier & Brazier-Sealed Door', desc: 'Set-piece puzzle (main descent): light every Seal Brazier in the Brazier Hall and its rune-sealed treasure door grinds open.' },
   { glyph: '≈', color: 'text-emerald-400', name: 'Biome Hazards (Spore / Frost / Ember / Shock)', desc: 'Hazardous dungeon floor patches. High Agility, Resolve, or Arcana harvests Glyph Dust instead of taking harm.' },
 ];
 
@@ -28,7 +30,8 @@ const STATUS_ITEMS = [
   { name: 'Monster Bestiary & Feats', tone: 'text-amber-300', desc: 'Open Journal [J] -> Bestiary to track kill milestones (+10% Hunter damage & permanent Slayer stats) and Expedition Feats.' },
   { name: 'Runeforge & Town Upgrades', tone: 'text-emerald-300', desc: 'Visit merchants -> Runeforge to etch permanent Rune Seals or reforge Rare+ affixes. Fund Apothecary, Smithy & Watchtower via Vance or Kaelen.' },
   { name: 'Floor Mini-Bosses & Rare Foes', tone: 'text-sky-300', desc: 'Named Wardens & Rare elites wielding player skills with pinned Boss Threat bars and Set Relic / Epic drops.' },
-  { name: 'Relic Sets (2-Piece Bonus)', tone: 'text-amber-200', desc: 'Equip 2 pieces of Starlight Outrider or Cinderforged Covenant to unlock permanent set bonuses.' },
+  { name: 'Relic Sets (2-Piece Bonus)', tone: 'text-amber-200', desc: 'Equip 2 pieces of a set — Starlight Outrider, Cinderforged Covenant, Thornbound Covenant, or Rimebound Regalia — to unlock permanent set bonuses.' },
+  { name: 'Set-Piece Rooms & Deep Fauna', tone: 'text-lime-300', desc: 'Each dungeon floor hides one hand-built set-piece room (a trapped Sepulcher, the Spore-Heart Chamber, the Rime Circle, or a Brazier-Sealed hall). Side dungeons breed their own foes — Grave Husks cheat death once, Spore Hulks burst when slain, and Rime Revenant bolts Chill.' },
   { name: 'Telegraphed Red Tiles', tone: 'text-rose-400', desc: 'Enemies with a [!] badge are winding up Ground Slam, Hex Bolt, or player skills. Step off red tiles to evade.' },
   { name: 'Runes & Infusions [6–8]', tone: 'text-emerald-300', desc: '3 permanent cooldown-based Inscription slots (Shielding, Phase Door, Wild Cleanse, Regen, Movement). Recharge naturally or via Safe Rest.' },
   { name: 'Milestone Prodigies (Lv 6 & 10)', tone: 'text-violet-300', desc: 'Build-defining capstones unlocked at Levels 6 and 10 inside Skills [K] -> Milestone Prodigies.' },
