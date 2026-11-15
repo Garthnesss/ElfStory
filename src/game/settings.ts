@@ -106,21 +106,40 @@ export function normalizeKeyInput(key: string): string | null {
  * Merge a stored (possibly partial / legacy / hostile) keymap over the
  * defaults. First claim wins on duplicates so resolution stays
  * deterministic; invalid entries fall back to that action's default.
+ * The result NEVER contains a duplicate binding: an action whose stored
+ * key and default are both already claimed is deferred and takes the
+ * first still-free key (defaults first, then letters) instead of
+ * silently shadowing the earlier action.
  */
 export function mergeKeymap(raw: unknown): Keymap {
   const source =
     raw && typeof raw === 'object' ? (raw as Partial<Record<KeyAction, unknown>>) : {};
   const out = {} as Keymap;
   const used = new Set<string>();
+  const deferred: KeyAction[] = [];
   for (const action of KEY_ACTIONS) {
     const candidate =
       typeof source[action] === 'string' ? normalizeKeyInput(source[action] as string) : null;
     if (candidate !== null && !used.has(candidate)) {
       out[action] = candidate;
       used.add(candidate);
-    } else {
+    } else if (!used.has(DEFAULT_KEYMAP[action])) {
       out[action] = DEFAULT_KEYMAP[action];
       used.add(DEFAULT_KEYMAP[action]);
+    } else {
+      deferred.push(action);
+    }
+  }
+  if (deferred.length > 0) {
+    const fallbackPool = [
+      ...KEY_ACTIONS.map((a) => DEFAULT_KEYMAP[a]),
+      ...'abcdefghijklmnopqrstuvwxyz'.split(''),
+    ];
+    for (const action of deferred) {
+      const key = fallbackPool.find((k) => !used.has(k));
+      if (key === undefined) break; // unreachable: pool exceeds action count
+      out[action] = key;
+      used.add(key);
     }
   }
   return out;

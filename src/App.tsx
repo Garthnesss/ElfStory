@@ -41,6 +41,7 @@ import {
   canLoadBundle,
   corruptSlotMessage,
   fallenBundleMessage,
+  futureVersionMessage,
   getLocalSlotKey,
   isBundleDead,
   parseStoredBundle,
@@ -454,6 +455,10 @@ export default function App() {
 
   // Wall-clock start of the current expedition (ending-screen stat).
   const runStartedAtRef = useRef<number>(Date.now());
+  // Tidy-up: expedition time banked by previous sessions of this run
+  // (restored from the bundle's playTimeMs). The Ending Screen shows
+  // base + the live session's span, so the total survives save/load.
+  const playTimeBaseRef = useRef(0);
 
   const [player, setPlayer] = useState<PlayerState>(() => createInitialPlayer('Vanguard'));
   const [zones, setZones] = useState<Record<ZoneId, ZoneMap>>(() => createInitialZones());
@@ -990,6 +995,11 @@ export default function App() {
         // already set always wins.
         ngPlusCycle: bundle.ngPlusCycle ?? ngPlusCycleRef.current,
         hardcore: bundle.hardcore ?? hardcoreRef.current,
+        // Tidy-up: bank the run's expedition time so far (prior sessions'
+        // base + this session's span) unless the bundle already sets it.
+        playTimeMs:
+          bundle.playTimeMs ??
+          playTimeBaseRef.current + (Date.now() - runStartedAtRef.current),
         deadAtMs: bundle.deadAtMs ?? deathStampRef.current?.deadAtMs ?? undefined,
         deathNote: bundle.deathNote ?? deathStampRef.current?.deathNote ?? undefined,
         updatedAtMs: Date.now(),
@@ -1340,6 +1350,7 @@ export default function App() {
         },
       ]);
       runStartedAtRef.current = Date.now();
+      playTimeBaseRef.current = 0;
       tutorialRestedRef.current = false;
       // First-run tutorial: once per device, only on a fresh expedition.
       setTutorialStepIdx(isTutorialDone() ? null : 0);
@@ -1432,6 +1443,9 @@ export default function App() {
     setAutoExploring(false);
     setZoneBanner(null);
     runStartedAtRef.current = Date.now();
+    // Tidy-up: restore the run's banked expedition time (0 for bundles
+    // written before the field existed).
+    playTimeBaseRef.current = data.playTimeMs ?? 0;
     setTutorialStepIdx(null);
     // Phase 7: a bundle saved on the death turn itself (hp <= 0, before
     // the death flow could stamp or resolve it) loads into the proper
@@ -1531,6 +1545,9 @@ export default function App() {
     ];
     setLogs(ascendLogs);
     runStartedAtRef.current = Date.now();
+    // Tidy-up: the ascended cycle is a fresh expedition — its clock
+    // starts over (the finished run's time stays in the lifetime stats).
+    playTimeBaseRef.current = 0;
     setTutorialStepIdx(null);
     bumpLifetime({ kind: 'expeditionStarted' });
     bumpLifetime({ kind: 'cycleReached', cycle: nextCycle });
@@ -1575,6 +1592,15 @@ export default function App() {
     (slotId: SaveSlotId) => {
       const entry = cloudSlotMap[slotId];
       if (!entry) return;
+      // Tidy-up: cloud bundles get the same future-version refusal as
+      // local ones — the local read path checks inside parseStoredBundle,
+      // but the cloud read path previously handed newer-build saves
+      // straight to the loader.
+      const cloudVersion = entry.payload.version ?? 0;
+      if (cloudVersion > SAVE_VERSION) {
+        window.alert(futureVersionMessage(cloudVersion));
+        return;
+      }
       applySavedBundle(entry.payload, slotId);
     },
     [applySavedBundle, cloudSlotMap]
@@ -3726,7 +3752,7 @@ export default function App() {
                   status: 'active',
                   stage: targetStage,
                   history: [
-                    `Attuned an Elven Waystone on Floor ${z.depth} (${Math.min(2, nextAttuned)}/2).`,
+                    `Attuned an Elven Waystone ${z.depth > 0 ? `on Floor ${z.depth}` : `in ${z.name}`} (${Math.min(2, nextAttuned)}/2).`,
                   ],
                 },
               };
@@ -3739,7 +3765,7 @@ export default function App() {
                 stage: Math.max(cur.stage, targetStage),
                 history: [
                   ...cur.history,
-                  `Attuned Elven Waystone on Floor ${z.depth} (${Math.min(2, nextAttuned)}/2).`,
+                  `Attuned Elven Waystone ${z.depth > 0 ? `on Floor ${z.depth}` : `in ${z.name}`} (${Math.min(2, nextAttuned)}/2).`,
                 ],
               },
             };
@@ -6752,7 +6778,7 @@ export default function App() {
           player={player}
           derived={derived}
           worldFlags={worldFlags}
-          playTimeMs={Date.now() - runStartedAtRef.current}
+          playTimeMs={playTimeBaseRef.current + (Date.now() - runStartedAtRef.current)}
           ngPlusCycle={ngPlusCycle}
           onAscend={handleAscendNgPlus}
           onContinueAbyss={() => {

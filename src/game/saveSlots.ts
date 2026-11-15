@@ -53,6 +53,10 @@ export interface SavedBundle {
   /** Epoch ms when the run first reached the ending (Phase 4 completion
    *  stamp). Absent until the Sovereign falls; survives Abyss continuation. */
   completedAtMs?: number;
+  /** Expedition time accumulated across sessions, in ms (tidy-up pass).
+   *  Absent on older bundles => 0; the live session adds its own span, so
+   *  the Ending Screen total survives save/load instead of restarting. */
+  playTimeMs?: number;
   /** NG+ ascension cycle (Phase 5). Absent on pre-P5 bundles => cycle 0.
    *  Optional-with-default, so SAVE_VERSION stays 1. */
   ngPlusCycle?: number;

@@ -268,7 +268,7 @@ export type EnemyArchetype =
 export type EnemyRank = 'normal' | 'elite' | 'rare' | 'randboss';
 
 export interface EnemyIntent {
-  type: 'strike' | 'heavy_windup' | 'hex_bolt' | 'ground_slam' | 'summon' | 'enemy_skill';
+  type: 'strike' | 'heavy_windup' | 'hex_bolt' | 'ground_slam' | 'enemy_skill';
   label: string;
   damage: number;
   targetTiles: Array<{ x: number; y: number }>;
