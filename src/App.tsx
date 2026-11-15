@@ -6,6 +6,7 @@ import { AsciiCanvas } from './components/AsciiCanvas';
 import { CharacterSkillsModal } from './components/CharacterSkillsModal';
 import { CreditsScreen } from './components/CreditsScreen';
 import { DialogueModal } from './components/DialogueModal';
+import { ConfirmModal, PendingConfirm } from './components/ConfirmModal';
 import { EndPauseModal } from './components/EndPauseModal';
 import { EndingScreen } from './components/EndingScreen';
 import { HallOfFameModal } from './components/HallOfFameModal';
@@ -22,6 +23,20 @@ import { TopHud } from './components/TopHud';
 import { TownUpgradesModal } from './components/TownUpgradesModal';
 import { TravelModal } from './components/TravelModal';
 import { resolveMusicTheme, soundEngine } from './game/audio';
+import { buildDeathCause, formatRunRecap, LastDamageSource } from './game/autopsy';
+import {
+  ChallengeId,
+  canUseConsumableWithChallenges,
+  challengeDisplayLine,
+  companionDamageWithChallenges,
+  companionMaxHpWithChallenges,
+  enemyGoldWithChallenges,
+  getCurrentChallenges,
+  normalizeChallenges,
+  setCurrentChallenges,
+} from './game/challenges';
+import { generateRunSeed, normalizeRunSeed, setCurrentRunSeed } from './game/rng';
+import { NewGameUnlockChoices, sanitizeUnlockChoices } from './game/unlocks';
 import {
   DIFFICULTY_INFO,
   DifficultyTier,
@@ -35,17 +50,24 @@ import {
   SAVE_VERSION,
   SavedBundle,
   SlotIssue,
+  bundleChallenges,
   bundleCycle,
   bundleDifficulty,
   bundleHardcore,
+  bundleSeed,
   canLoadBundle,
+  canOfferReturnToEnding,
+  clearCompletionStamp,
   corruptSlotMessage,
+  deleteSlotConfirmMessage,
   fallenBundleMessage,
   futureVersionMessage,
   getLocalSlotKey,
   isBundleDead,
+  overwriteConfirmMessage,
   parseStoredBundle,
   readAllSlotStates,
+  resolveLoadedState,
   stampBundle,
 } from './game/saveSlots';
 import {
@@ -53,6 +75,7 @@ import {
   LifetimeStats,
   applyLifetimeEvent,
   deepestDepthForZones,
+  formatDeathNote,
   loadLifetime,
   saveLifetime,
 } from './game/lifetime';
@@ -83,6 +106,7 @@ import {
   loadAllCloudSlots,
   loadChroniclesFromCloud,
   packZones,
+  pruneAbyssZones,
   recordChronicleToCloud,
   SAVE_SLOTS,
   saveSlotToCloud,
@@ -107,9 +131,18 @@ import {
   findPathNextStep,
   hasAffix,
   hasLineOfSight,
+  isKitingCaster,
+  lungeDestination,
   manhattan,
+  MEND_COOLDOWN_TURNS,
+  planCasterMove,
+  resolveMend,
+  shouldPrimeLungeAfterMove,
+  SUMMON_COOLDOWN_TURNS,
 } from './game/combat';
 import {
+  applyMasterworkTemper,
+  canMasterworkTemper,
   createConsumable,
   createNamedRelic,
   createQuestItem,
@@ -120,11 +153,26 @@ import {
   generateProceduralItem,
   getSalvageDustYield,
   getStarterInscriptions,
+  hasEquippableLoot,
   INSCRIPTION_META,
+  LOOT_COMPARE_PROMPT,
+  MASTERWORK_TEMPER_COST,
+  rerollAffixCost,
   rerollEquipmentAffix,
   RUNE_ENCHANTS,
+  temperCapFor,
   upgradeEquipmentItem,
 } from './game/loot';
+import {
+  applyBlessing,
+  BLESSING_DEFS,
+  BLESSING_DURATION_TURNS,
+  BLESSING_IDS,
+  blessingCost,
+  canPurchaseBlessing,
+  type BlessingId,
+} from './game/blessings';
+import { mutatorIntroLine, mutatorLightPenalty, mutatorLootBonus } from './game/mutators';
 import { createMerchantStock, LORE_ENTRIES, NPCS, QUEST_DEFS } from './game/npcs';
 import {
   canLearnProdigy,
@@ -136,6 +184,7 @@ import {
   PRODIGIES,
   SKILLS,
 } from './game/skills';
+import { resolveDirectionalSkillCast } from './game/skillTargeting';
 import {
   ActivePanel,
   AttributeKey,
@@ -144,6 +193,7 @@ import {
   CompanionState,
   DialogueChoice,
   Enemy,
+  EnemyIntent,
   FloatingEffect,
   GameState,
   HitFlash,
@@ -164,7 +214,7 @@ import {
   ZoneMap,
 } from './game/types';
 import { pickAmbientBark, pickDungeonAmbience, stepCritters, stepNpcWander } from './game/ambient';
-import { createInitialZones, generateDungeonFloor, generateZoneById, getZoneContext } from './game/world';
+import { createEnemy, createInitialZones, generateDungeonFloor, generateZoneById, getZoneContext, isSerathGateSealed } from './game/world';
 
 const CHRONICLES_KEY = 'ashen_glyph_chronicles_v1';
 
@@ -262,10 +312,34 @@ function readLocalChronicles(): ChronicleEntry[] {
   }
 }
 
+/**
+ * Phase 8 Tier 3 autopsy: the short attack noun a telegraphed intent's
+ * death cause uses ("Slain by Inquisitor Serath's telegraphed slam").
+ * Intent labels are present-tense flavor ("Winding up Ground Slam");
+ * the autopsy wants the landed blow's name.
+ */
+function telegraphDetailFor(type: EnemyIntent['type'], skillId?: SkillId): string {
+  switch (type) {
+    case 'ground_slam':
+      return 'telegraphed slam';
+    case 'hex_bolt':
+      return 'hex bolt';
+    case 'lunge':
+      return 'lunging strike';
+    case 'enemy_skill':
+      return skillId ? `telegraphed ${SKILLS[skillId].name}` : 'telegraphed skill';
+    default:
+      return 'telegraphed strike';
+  }
+}
+
 // P1: companion durability scales with player level. Flat 24/20 HP meant the
 // companion died permanently from about F5 no matter how strong the player got.
+// Phase 8 Tier 3: the Frail Companion challenge halves the result through
+// the challenges funnel (identity when the challenge is inactive).
 function companionMaxHpFor(kind: CompanionKind, level: number): number {
-  return kind === 'starlight_owl' ? 20 + (level - 1) * 5 : 24 + (level - 1) * 7;
+  const base = kind === 'starlight_owl' ? 20 + (level - 1) * 5 : 24 + (level - 1) * 7;
+  return companionMaxHpWithChallenges(base, getCurrentChallenges());
 }
 
 function makeCompanion(kind: CompanionKind, x: number, y: number, level = 1): CompanionState {
@@ -294,10 +368,12 @@ function makeCompanion(kind: CompanionKind, x: number, y: number, level = 1): Co
   };
 }
 
-function getSightRadius(p: PlayerState, flags?: WorldFlags): number {
+function getSightRadius(p: PlayerState, flags?: WorldFlags, zone?: ZoneMap): number {
   const owlBonus = p.companion?.kind === 'starlight_owl' && p.companion.hp > 0 ? 1 : 0;
   const watchtowerBonus = (flags?.townUpgrades?.watchtower ?? 0) >= 2 ? 1 : 0;
-  return 8 + owlBonus + watchtowerBonus;
+  // Phase 8 Tier 2B: an Umbral floor shrinks the player's light radius by 2.
+  const mutatorPenalty = zone ? mutatorLightPenalty(zone.mutator) : 0;
+  return 8 + owlBonus + watchtowerBonus - mutatorPenalty;
 }
 
 function placeCompanionNear(zone: ZoneMap, px: number, py: number): { x: number; y: number } {
@@ -326,10 +402,18 @@ function placeCompanionNear(zone: ZoneMap, px: number, py: number): { x: number;
   return { x: px, y: py };
 }
 
-function createInitialPlayer(starterClass: PlayerState['starterClass']): PlayerState {
+function createInitialPlayer(
+  starterClass: PlayerState['starterClass'],
+  // Phase 8 Tier 3: SANITIZED unlock choices (game/unlocks.ts) — the
+  // caller must pass sanitizeUnlockChoices output, never raw UI state,
+  // so a locked option cannot be applied here.
+  unlockChoices?: { companionKind?: CompanionKind | null; veteransCache?: boolean }
+): PlayerState {
   const preset = getStarterPreset(starterClass);
   const starterWeapon = createStarterItem(preset.weaponTag);
-  const companionKind: CompanionKind = starterClass === 'Runecaster' ? 'starlight_owl' : 'silverwind_lynx';
+  const companionKind: CompanionKind =
+    unlockChoices?.companionKind ??
+    (starterClass === 'Runecaster' ? 'starlight_owl' : 'silverwind_lynx');
   const basePlayer: PlayerState = {
     name: 'Garth Elfstrom',
     starterClass,
@@ -366,6 +450,20 @@ function createInitialPlayer(starterClass: PlayerState['starterClass']): PlayerS
     firstStrikeReady: true,
     companion: makeCompanion(companionKind, 11, 9),
   };
+  // Phase 8 Tier 3: the Veteran's Cache — one extra random inscription
+  // from the standard pool, in the starter kit's free third slot (or the
+  // Pack, should a future kit ever fill all three).
+  if (unlockChoices?.veteransCache) {
+    const cacheItem = generateInscription(1, { minRarity: 'Uncommon' });
+    const slots = [...(basePlayer.inscriptions ?? [null, null, null])];
+    const freeIdx = slots.findIndex((s) => s === null);
+    if (freeIdx >= 0) {
+      slots[freeIdx] = cacheItem;
+      basePlayer.inscriptions = slots;
+    } else {
+      basePlayer.inventory = [...basePlayer.inventory, cacheItem];
+    }
+  }
   const derived = computeDerivedStats(basePlayer);
   basePlayer.maxHp = derived.maxHp;
   basePlayer.hp = derived.maxHp;
@@ -487,6 +585,26 @@ export default function App() {
   );
   const [activeMerchantId, setActiveMerchantId] = useState<string | null>(null);
   const [specialPrompt, setSpecialPrompt] = useState<SpecialPrompt | null>(null);
+  // Phase 8 fix pack: destructive actions (new-game overwrite, slot delete)
+  // confirm through the in-game ConfirmModal instead of window.confirm.
+  // The ref mirror lets the resolver consume the pending action exactly
+  // once, however the player confirms (button click, Enter, backdrop).
+  const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
+  const pendingConfirmRef = useRef<PendingConfirm | null>(null);
+  const queuePendingConfirm = useCallback((pending: PendingConfirm) => {
+    pendingConfirmRef.current = pending;
+    setPendingConfirm(pending);
+  }, []);
+  const resolvePendingConfirm = useCallback(() => {
+    const pending = pendingConfirmRef.current;
+    pendingConfirmRef.current = null;
+    setPendingConfirm(null);
+    pending?.onConfirm();
+  }, []);
+  const cancelPendingConfirm = useCallback(() => {
+    pendingConfirmRef.current = null;
+    setPendingConfirm(null);
+  }, []);
 
   const [floatingEffects, setFloatingEffects] = useState<FloatingEffect[]>([]);
   const [particles, setParticles] = useState<ParticleBurst[]>([]);
@@ -544,6 +662,33 @@ export default function App() {
   // into every later save so the fallen state can never be overwritten.
   const deathStampRef = useRef<{ deadAtMs: number; deathNote?: string } | null>(null);
 
+  // Phase 8 Tier 3: the run's seed and challenge list live in the save
+  // bundle (per-run, like difficulty/hardcore) and mirror into the rng /
+  // challenges modules, where world generation, the derived-stat funnel
+  // and the spawn/gold funnels read them. applyRunSeed / applyChallenges
+  // are the single write paths, mirroring applyDifficulty. The seed is
+  // undefined only for legacy bundles written before Tier 3.
+  const [runSeed, setRunSeed] = useState<string | undefined>(undefined);
+  const runSeedRef = useRef<string | undefined>(undefined);
+  const applyRunSeed = useCallback((seed: string | undefined) => {
+    const clean = normalizeRunSeed(seed);
+    runSeedRef.current = clean;
+    setCurrentRunSeed(clean);
+    setRunSeed(clean);
+  }, []);
+  const [challenges, setChallenges] = useState<ChallengeId[]>([]);
+  const challengesRef = useRef<ChallengeId[]>([]);
+  const applyChallenges = useCallback((list: readonly ChallengeId[]) => {
+    const clean = normalizeChallenges([...list]);
+    challengesRef.current = clean;
+    setCurrentChallenges(clean);
+    setChallenges(clean);
+  }, []);
+  // Phase 8 Tier 3 autopsy: the last blow that damaged the player,
+  // recorded at every player-damage site; read when a run ends to build
+  // the chronicle's cause line. Session-only — a loaded run starts clean.
+  const lastDamageRef = useRef<LastDamageSource | null>(null);
+
   // Phase 5 lifetime stats: per-device record kept OUTSIDE save bundles
   // (game/lifetime.ts). Mirrored in a ref so event funnels inside stable
   // callbacks always read the freshest totals.
@@ -570,6 +715,8 @@ export default function App() {
     lore: string;
     tactical: string;
     recommended: string;
+    /** Phase 8 Tier 2B: the entered floor's mutator line, when it has one. */
+    mutatorLine?: string;
   } | null>(null);
   // Phase 6 coach-mark toast: same non-blocking banner idiom as the zone
   // banner, fed by the pendingCoachMarksRef queue.
@@ -714,6 +861,7 @@ export default function App() {
       y: player.y,
       kills: player.kills,
       consumableCount: countConsumables(player.inventory),
+      companionStance: player.companion?.stance ?? 'aggressive',
     };
     // Baseline is intentionally captured once per step, not per player change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -737,6 +885,7 @@ export default function App() {
       y: player.y,
       kills: player.kills,
       consumableCount: countConsumables(player.inventory),
+      companionStance: player.companion?.stance ?? 'aggressive',
       dialogueOpen: activeDialogue !== null,
       anySkillOnCooldown:
         Object.values(player.cooldowns).some((v) => (v ?? 0) > 0) ||
@@ -935,6 +1084,17 @@ export default function App() {
         gold: finalPlayer.gold,
         keyDecisions: decisions.slice(0, 8),
         createdAtMs: Date.now(),
+        // Phase 8 Tier 3 autopsy: a fallen run's chronicle names its
+        // cause, built from the last damage source the game recorded.
+        ...(outcome === 'fallen'
+          ? {
+              deathCause: buildDeathCause({
+                lastDamage: lastDamageRef.current,
+                zoneName: currentZone.name,
+                depth: currentZone.depth,
+              }),
+            }
+          : {}),
       };
 
       // Phase 5: a chronicle entry is written exactly once per run ending,
@@ -986,7 +1146,7 @@ export default function App() {
       // Phase 4: every persisted bundle carries the format version, the
       // run's difficulty tier, and its completion stamp (fields already on
       // the bundle win; otherwise the live run's values fill in).
-      const stamped: SavedBundle = {
+      const stampedRaw: SavedBundle = {
         ...stampBundle(bundle),
         difficulty: bundle.difficulty ?? difficultyRef.current,
         completedAtMs: bundle.completedAtMs ?? completedAtMsRef.current ?? undefined,
@@ -995,6 +1155,14 @@ export default function App() {
         // already set always wins.
         ngPlusCycle: bundle.ngPlusCycle ?? ngPlusCycleRef.current,
         hardcore: bundle.hardcore ?? hardcoreRef.current,
+        // Phase 8 Tier 3: seed / challenges default from the live run's
+        // refs the same way (a bundle field already set always wins; a
+        // legacy seedless run stays seedless — undefined is stripped by
+        // the storage writers, never persisted as a value).
+        runSeed: bundle.runSeed ?? runSeedRef.current,
+        challenges:
+          bundle.challenges ??
+          (challengesRef.current.length > 0 ? [...challengesRef.current] : undefined),
         // Tidy-up: bank the run's expedition time so far (prior sessions'
         // base + this session's span) unless the bundle already sets it.
         playTimeMs:
@@ -1003,6 +1171,16 @@ export default function App() {
         deadAtMs: bundle.deadAtMs ?? deathStampRef.current?.deadAtMs ?? undefined,
         deathNote: bundle.deathNote ?? deathStampRef.current?.deathNote ?? undefined,
         updatedAtMs: Date.now(),
+      };
+      // Audit fix (Nov 14): bound the persisted zone set — stale Abyss
+      // floors (~12 KB packed each) otherwise grow the save until cloud
+      // sync crosses its size ceiling. The live `zones` state is NOT
+      // pruned; only the persisted bundle is, and pruned floors
+      // regenerate on revisit. The current zone is never dropped, so the
+      // slot summaries below still resolve its name.
+      const stamped: SavedBundle = {
+        ...stampedRaw,
+        zones: pruneAbyssZones(stampedRaw.zones, stampedRaw.currentZoneId),
       };
       const compactForLocal = {
         ...stamped,
@@ -1212,7 +1390,7 @@ export default function App() {
     const deepest = deepestDepthForZones(s.worldFlags.discoveredZones, zone?.depth ?? 0);
     deathStampRef.current = {
       deadAtMs: Date.now(),
-      deathNote: `Fell on Floor ${deepest} · ${zone?.name ?? 'the deep'}`,
+      deathNote: formatDeathNote(deepest, zone?.name ?? 'the deep'),
     };
     saveBundleToStorage(
       {
@@ -1268,24 +1446,25 @@ export default function App() {
     }
   }, []);
 
-  const handleStartNew = useCallback(
+  const startNewRun = useCallback(
     (
       starterClass: PlayerState['starterClass'],
       slotOverride?: SaveSlotId,
       difficultyChoice?: DifficultyTier,
-      hardcoreChoice?: boolean
-    ) => {
-      // Destructive-action guard: starting fresh over an occupied slot
-      // (from the Title Screen's New Adventure, or Play Again on the
-      // game-over / victory screens, which routes through here) discards
-      // that slot's saved run. Always confirm first.
-      const targetSlot = slotOverride ?? activeSlot;
-      if (localSlotMap[targetSlot] || cloudSlotMap[targetSlot]) {
-        const ok = window.confirm(
-          `${targetSlot === 'slot_1' ? 'Slot 1' : targetSlot === 'slot_2' ? 'Slot 2' : 'Slot 3'} already holds a saved expedition. Starting a new adventure will overwrite it. Continue?`
-        );
-        if (!ok) return;
+      hardcoreChoice?: boolean,
+      // Phase 8 Tier 3: the Title Screen's seed / challenge / unlock
+      // choices. Play Again passes nothing: the new run keeps the
+      // replaced run's challenges (mirroring difficulty/hardcore) but
+      // always draws a FRESH seed, and takes no unlock options.
+      tier3Choices?: {
+        seedInput?: string;
+        challenges?: ChallengeId[];
+        unlockChoices?: NewGameUnlockChoices;
       }
+    ) => {
+      // The destructive-action guard (confirm before overwriting an
+      // occupied slot) lives in handleStartNew below; by the time this
+      // runs, the overwrite is confirmed or the slot was empty.
       soundEngine.playClick();
       if (slotOverride) setActiveSlot(slotOverride);
       recordedVictoryRef.current = false;
@@ -1302,9 +1481,19 @@ export default function App() {
       applyCycle(0);
       applyHardcore(hardcoreChoice ?? hardcoreRef.current);
       deathStampRef.current = null;
+      // Phase 8 Tier 3: seed + challenges are applied BEFORE the world
+      // is generated and the player is built — generation reads the seed
+      // (and Horde World) from the modules, and the player's derived
+      // stats / companion read the challenges. A supplied seed wins;
+      // otherwise the run draws a fresh one. Unlock choices pass through
+      // the pure-layer guard, so locked options can never be applied.
+      applyRunSeed(normalizeRunSeed(tier3Choices?.seedInput) ?? generateRunSeed());
+      applyChallenges(tier3Choices?.challenges ?? challengesRef.current);
+      lastDamageRef.current = null;
+      const unlockChoices = sanitizeUnlockChoices(lifetimeRef.current, tier3Choices?.unlockChoices);
       bumpLifetime({ kind: 'expeditionStarted' });
       const freshZones = createInitialZones();
-      const freshPlayer = createInitialPlayer(starterClass);
+      const freshPlayer = createInitialPlayer(starterClass, unlockChoices);
       const initialFlags = createInitialFlags();
       freshPlayer.x = freshZones.oakhaven.spawnPoint.x;
       freshPlayer.y = freshZones.oakhaven.spawnPoint.y;
@@ -1348,6 +1537,16 @@ export default function App() {
           text: oakhavenCtx.tactical,
           tone: 'neutral',
         },
+        ...(unlockChoices.veteransCache
+          ? [
+              {
+                id: uid('log'),
+                turn: 0,
+                text: 'The Veteran’s Cache provides an extra inscription for the road — a keepsake of descents past.',
+                tone: 'loot' as const,
+              },
+            ]
+          : []),
       ]);
       runStartedAtRef.current = Date.now();
       playTimeBaseRef.current = 0;
@@ -1357,15 +1556,48 @@ export default function App() {
       setGameState('PLAYING');
     },
     [
-      activeSlot,
+      applyChallenges,
       applyCycle,
       applyDifficulty,
       applyHardcore,
+      applyRunSeed,
       bumpLifetime,
-      cloudSlotMap,
-      localSlotMap,
       updateCompletedAtMs,
     ]
+  );
+
+  // Destructive-action guard: starting fresh over an occupied slot (from
+  // the Title Screen's New Adventure, or Play Again on the game-over /
+  // victory screens, which routes through here) discards that slot's saved
+  // run. Phase 8 fix pack: the confirmation goes through the in-game
+  // ConfirmModal (state-driven) instead of the old synchronous
+  // window.confirm — confirming runs startNewRun with the exact arguments
+  // captured here; cancelling does nothing at all.
+  const handleStartNew = useCallback(
+    (
+      starterClass: PlayerState['starterClass'],
+      slotOverride?: SaveSlotId,
+      difficultyChoice?: DifficultyTier,
+      hardcoreChoice?: boolean,
+      tier3Choices?: {
+        seedInput?: string;
+        challenges?: ChallengeId[];
+        unlockChoices?: NewGameUnlockChoices;
+      }
+    ) => {
+      const targetSlot = slotOverride ?? activeSlot;
+      if (localSlotMap[targetSlot] || cloudSlotMap[targetSlot]) {
+        queuePendingConfirm({
+          message: overwriteConfirmMessage(targetSlot),
+          confirmLabel: 'Overwrite',
+          onConfirm: () =>
+            startNewRun(starterClass, slotOverride, difficultyChoice, hardcoreChoice, tier3Choices),
+        });
+        return;
+      }
+      startNewRun(starterClass, slotOverride, difficultyChoice, hardcoreChoice, tier3Choices);
+    },
+    [activeSlot, cloudSlotMap, localSlotMap, queuePendingConfirm, startNewRun]
   );
 
   const applySavedBundle = useCallback((data: SavedBundle, slotId: SaveSlotId) => {
@@ -1387,6 +1619,12 @@ export default function App() {
     // hardcore flag (pre-P5 bundles => false).
     applyCycle(bundleCycle(data));
     applyHardcore(bundleHardcore(data));
+    // Phase 8 Tier 3: restore the run's seed and challenges BEFORE the
+    // baseline zones below are built — a pre-Tier-3 bundle has neither,
+    // and the run simply continues on the unseeded, unchallenged path.
+    applyRunSeed(bundleSeed(data));
+    applyChallenges(bundleChallenges(data));
+    lastDamageRef.current = null;
     deathStampRef.current = isBundleDead(data)
       ? { deadAtMs: data.deadAtMs!, deathNote: data.deathNote }
       : null;
@@ -1406,6 +1644,17 @@ export default function App() {
         data.player.companion ??
         makeCompanion(defaultCompanionKind, data.player.x, data.player.y, data.player.level),
     };
+    // Audit fix (Nov 14): resolve a death-turn bundle (hp <= 0) by mode —
+    // Hardcore enters the death flow (and gets stamped); a non-Hardcore
+    // run is rescued at 1 HP instead of locking its slot behind
+    // GAME_OVER. See resolveLoadedState in game/saveSlots.ts.
+    const loadedState = resolveLoadedState({
+      hp: normalizedPlayer.hp,
+      hardcore: bundleHardcore(data),
+    });
+    if (loadedState.hp !== normalizedPlayer.hp) {
+      normalizedPlayer.hp = loadedState.hp;
+    }
     const normalizedFlags: WorldFlags = {
       ...createInitialFlags(),
       ...data.worldFlags,
@@ -1435,7 +1684,19 @@ export default function App() {
       ...createInitialMerchants(),
       ...data.merchantStocks,
     });
-    setLogs(data.logs);
+    setLogs(
+      loadedState.hp === 1 && data.player.hp <= 0
+        ? [
+            ...data.logs,
+            {
+              id: uid('log'),
+              turn: normalizedPlayer.turnsElapsed,
+              text: 'You stir at the very brink — battered and breathing at 1 HP. The death turn could not claim this run; drink a draught and press on.',
+              tone: 'danger' as const,
+            },
+          ]
+        : data.logs
+    );
     setActivePanel('NONE');
     setArmedSkill(null);
     setArmedInscriptionSlot(null);
@@ -1447,22 +1708,26 @@ export default function App() {
     // written before the field existed).
     playTimeBaseRef.current = data.playTimeMs ?? 0;
     setTutorialStepIdx(null);
-    // Phase 7: a bundle saved on the death turn itself (hp <= 0, before
-    // the death flow could stamp or resolve it) loads into the proper
-    // GAME_OVER screen — never into a frozen scene where the turn loop
-    // no longer runs. In a hardcore run the GAME_OVER effect then
-    // applies the death stamp, closing the tab-close race as well.
-    setGameState(normalizedPlayer.hp <= 0 ? 'GAME_OVER' : 'PLAYING');
+    // Phase 7 + audit fix: a bundle saved on the death turn itself
+    // (hp <= 0, before the death flow could stamp or resolve it) never
+    // loads into a frozen scene where the turn loop no longer runs —
+    // resolveLoadedState sends Hardcore runs to the proper GAME_OVER
+    // screen (whose effect applies the death stamp, closing the
+    // tab-close race) and rescues non-Hardcore runs at 1 HP.
+    setGameState(loadedState.gameState);
     soundEngine.playClick();
-  }, [applyCycle, applyDifficulty, applyHardcore, bumpLifetime, updateCompletedAtMs]);
+  }, [applyChallenges, applyCycle, applyDifficulty, applyHardcore, applyRunSeed, bumpLifetime, updateCompletedAtMs]);
 
   // Phase 5: New Game+ ascension. The world is rebuilt completely fresh
   // (the same construction a new expedition uses) while the character
   // carries over: level, attributes, skill points/skills, equipment,
   // inventory, gold, glyph dust, and companion. Per-cycle run state
-  // (kills, turns, quests, flags, merchants) resets; difficulty, hardcore,
-  // and the completion stamp carry over. The new cycle is applied BEFORE
-  // the fresh world is generated, so every foe in it is cycle-scaled.
+  // (kills, turns, quests, flags, merchants) resets; difficulty and
+  // hardcore carry over. The completion stamp does NOT (audit fix,
+  // Nov 14): it describes the finished cycle, so it is cleared here and
+  // the new cycle earns its own — lifetime stats keep past victories.
+  // The new cycle is applied BEFORE the fresh world is generated, so
+  // every foe in it is cycle-scaled.
   const handleAscendNgPlus = useCallback(() => {
     const nextCycle = ngPlusCycleRef.current + 1;
     soundEngine.playLevelUp();
@@ -1496,6 +1761,9 @@ export default function App() {
       kills: 0,
       turnsElapsed: 0,
       firstStrikeReady: true,
+      // Phase 8 Tier 2B: a new cycle resets the shrine-offering escalation
+      // (and statuses: [] above already ends any active blessing).
+      blessingPurchases: 0,
       companion,
     };
     const derivedNow = computeDerivedStats(carried, freshFlags);
@@ -1508,6 +1776,12 @@ export default function App() {
     recordedVictoryRef.current = false;
     recordedFallenRef.current = false;
     deathStampRef.current = null;
+    // Phase 8 Tier 3: the new cycle keeps the run's seed and challenges
+    // (the refs already hold them, and saveBundleToStorage defaults them
+    // into the persisted bundle); the autopsy tracker starts clean. The
+    // seed's generation form folds the cycle in (game/rng.ts), so the
+    // remade world's layouts are fresh, not cycle 0's replayed.
+    lastDamageRef.current = null;
     setZones(freshZones);
     setPlayer(carried);
     setCurrentZoneId('oakhaven');
@@ -1552,10 +1826,17 @@ export default function App() {
     bumpLifetime({ kind: 'expeditionStarted' });
     bumpLifetime({ kind: 'cycleReached', cycle: nextCycle });
     setGameState('PLAYING');
+    // Audit fix (Nov 14): clear the finished cycle's completion stamp
+    // BEFORE persisting — saveBundleToStorage defaults the stamp from
+    // completedAtMsRef, so the ref must be cleared first, and the bundle
+    // itself is passed through clearCompletionStamp so no stamp can ride
+    // into the new cycle. The "✦ Completed" badge then reflects the
+    // current cycle, and the stamp effect can stamp its own victory.
+    updateCompletedAtMs(null);
     // Persist immediately, so the ascended run is the slot's state even if
     // the tab closes before the next autosave.
     saveBundleToStorage(
-      {
+      clearCompletionStamp({
         player: carried,
         zones: freshZones,
         currentZoneId: 'oakhaven',
@@ -1566,12 +1847,11 @@ export default function App() {
         ngPlusCycle: nextCycle,
         hardcore: hardcoreRef.current,
         difficulty: difficultyRef.current,
-        completedAtMs: completedAtMsRef.current ?? undefined,
-      },
+      }),
       undefined,
       activeSlot
     );
-  }, [activeSlot, applyCycle, bumpLifetime, player, saveBundleToStorage]);
+  }, [activeSlot, applyCycle, bumpLifetime, player, saveBundleToStorage, updateCompletedAtMs]);
 
   const handleContinueSaved = useCallback(
     (slotId: SaveSlotId) => {
@@ -1606,15 +1886,10 @@ export default function App() {
     [applySavedBundle, cloudSlotMap]
   );
 
-  const handleDeleteSlot = useCallback(
+  const deleteSlot = useCallback(
     async (slotId: SaveSlotId) => {
-      // Deleting a save is irreversible (local + cloud) — confirm first.
-      if (localSlotMap[slotId] || cloudSlotMap[slotId]) {
-        const ok = window.confirm(
-          `Delete the saved expedition in ${slotId === 'slot_1' ? 'Slot 1' : slotId === 'slot_2' ? 'Slot 2' : 'Slot 3'}? This removes both the local and cloud save and cannot be undone.`
-        );
-        if (!ok) return;
-      }
+      // The confirm-first guard lives in handleDeleteSlot below; by the
+      // time this runs, the deletion is confirmed or the slot was empty.
       soundEngine.playClick();
       try {
         localStorage.removeItem(getLocalSlotKey(slotId));
@@ -1650,7 +1925,29 @@ export default function App() {
         }
       }
     },
-    [authUser, cloudSlotMap, localSlotMap]
+    [authUser]
+  );
+
+  // Deleting a save is irreversible (local + cloud) — confirm first.
+  // Phase 8 fix pack: through the in-game ConfirmModal instead of
+  // window.confirm; confirming runs deleteSlot for the captured slot,
+  // cancelling does nothing at all.
+  const handleDeleteSlot = useCallback(
+    (slotId: SaveSlotId) => {
+      if (localSlotMap[slotId] || cloudSlotMap[slotId]) {
+        queuePendingConfirm({
+          message: deleteSlotConfirmMessage(slotId),
+          confirmLabel: 'Delete Save',
+          danger: true,
+          onConfirm: () => {
+            void deleteSlot(slotId);
+          },
+        });
+        return;
+      }
+      void deleteSlot(slotId);
+    },
+    [cloudSlotMap, deleteSlot, localSlotMap, queuePendingConfirm]
   );
 
   const evaluateFeatsAndApply = useCallback(
@@ -1859,7 +2156,7 @@ export default function App() {
       movedPlayer = featRes.nextPlayer;
       nextFlags = featRes.nextFlags;
 
-      computeVisibility(target, movedPlayer.x, movedPlayer.y, getSightRadius(movedPlayer, nextFlags));
+      computeVisibility(target, movedPlayer.x, movedPlayer.y, getSightRadius(movedPlayer, nextFlags, target));
       const nextZones = { ...curZones, [targetZoneId]: target };
       setZones(nextZones);
       setCurrentZoneId(targetZoneId);
@@ -1872,6 +2169,7 @@ export default function App() {
         name: target.name,
         subtitle: target.subtitle,
         ...ctxBrief,
+        mutatorLine: mutatorIntroLine(target.mutator),
       });
       soundEngine.playDoor();
       pushLog(`Entered ${target.name} (${target.subtitle}).`, 'quest', movedPlayer.turnsElapsed);
@@ -1898,6 +2196,25 @@ export default function App() {
       flagsOverride?: WorldFlags
     ): { nextPlayer: PlayerState; nextZone: ZoneMap; nextFlags: WorldFlags; victoryTriggered: boolean } => {
       const baseFlags = flagsOverride ?? worldFlags;
+
+      // Phase 8 Tier 2A anti-exploit: a weaver's summoned mites are worth
+      // NOTHING — no XP, no gold, no loot drop, no kill count, no bestiary
+      // credit, no feat progress. Every kill funnels through this handler,
+      // so the whole reward pipeline is skipped here for summoned enemies.
+      if (enemy.summoned) {
+        const nextZone: ZoneMap = {
+          ...zone,
+          enemies: zone.enemies.filter((e) => e.id !== enemy.id),
+          loot: [...zone.loot],
+        };
+        spawnBurst(enemy.x, enemy.y, '#84CC16', '✦', 6);
+        pushLog(
+          `The ${enemy.name} dissolves into mire-mist — a summoned thing leaves no spoils.`,
+          'neutral',
+          p.turnsElapsed
+        );
+        return { nextPlayer: { ...p }, nextZone, nextFlags: baseFlags, victoryTriggered: false };
+      }
 
       // Phase 3: Grave Husk "Deathless" — the first killing blow does not
       // take it. Every death in the game funnels through this handler, so
@@ -1969,7 +2286,10 @@ export default function App() {
         nextFlags = { ...nextFlags, malakorDefeated: true };
       }
 
-      let nextP = { ...p, kills: p.kills + 1, gold: p.gold + enemy.goldReward };
+      // Phase 8 Tier 3: Cursed Gold halves what the slain drop, here in
+      // the single kill funnel (quest/feat gold never passes through).
+      const goldGain = enemyGoldWithChallenges(enemy.goldReward, getCurrentChallenges());
+      let nextP = { ...p, kills: p.kills + 1, gold: p.gold + goldGain };
       // Phase 5: every kill in the game funnels through this handler (the
       // Grave Husk Deathless cheat returns above, correctly earning no
       // credit), so lifetime kills are counted here.
@@ -2007,6 +2327,10 @@ export default function App() {
           const burstDmg = 6 + zone.depth * 2;
           nextP = { ...nextP, statuses: [...nextP.statuses] };
           nextP.hp -= burstDmg;
+          lastDamageRef.current = {
+            kind: 'environment',
+            name: `${enemy.name}'s death-burst`,
+          };
           applyStatus(nextP.statuses, 'poison', 3, 3);
           triggerShake(150);
           spawnFloating(nextP.x, nextP.y, `-${burstDmg} BURST`, '#84CC16');
@@ -2021,12 +2345,15 @@ export default function App() {
       }
 
       // Drop loot
+      // Phase 8 Tier 2B: an Umbral floor's gloom hides richer spoils —
+      // its mutator bonus feeds every rarity roll made for this floor.
+      const lootBonus = mutatorLootBonus(zone.mutator);
       const dropRoll = Math.random();
       if (enemy.rank === 'randboss') {
         const randbossItem =
           Math.random() < 0.4
             ? createRandomSetRelic(zone.depth)
-            : generateProceduralItem(zone.depth + 1, { minRarity: 'Epic' });
+            : generateProceduralItem(zone.depth + 1, { minRarity: 'Epic', lootBonus });
         nextZ.loot.push({
           id: uid('drop'),
           x: enemy.x,
@@ -2037,13 +2364,13 @@ export default function App() {
           id: uid('drop'),
           x: enemy.x,
           y: enemy.y,
-          item: generateInscription(zone.depth, { minRarity: 'Rare' }),
+          item: generateInscription(zone.depth, { minRarity: 'Rare', lootBonus }),
         });
       } else if (enemy.rank === 'rare') {
         const rareDrop =
           Math.random() < 0.45
-            ? generateInscription(zone.depth, { minRarity: 'Rare' })
-            : generateProceduralItem(zone.depth + 1, { minRarity: 'Rare' });
+            ? generateInscription(zone.depth, { minRarity: 'Rare', lootBonus })
+            : generateProceduralItem(zone.depth + 1, { minRarity: 'Rare', lootBonus });
         nextZ.loot.push({
           id: uid('drop'),
           x: enemy.x,
@@ -2055,12 +2382,12 @@ export default function App() {
         const dropped = enemy.isBoss
           ? Math.random() < 0.35
             ? createRandomSetRelic(zone.depth)
-            : generateProceduralItem(zone.depth, { minRarity: 'Epic' })
+            : generateProceduralItem(zone.depth, { minRarity: 'Epic', lootBonus })
           : Math.random() < 0.28
           ? createConsumable(Math.random() < 0.6 ? 'heal_potion' : 'mana_potion', 1)
           : zone.depth >= 2 && Math.random() < 0.16
-          ? generateInscription(zone.depth, { minRarity: minRar })
-          : generateProceduralItem(zone.depth, { minRarity: minRar });
+          ? generateInscription(zone.depth, { minRarity: minRar, lootBonus })
+          : generateProceduralItem(zone.depth, { minRarity: minRar, lootBonus });
         nextZ.loot.push({
           id: uid('drop'),
           x: enemy.x,
@@ -2074,7 +2401,7 @@ export default function App() {
 
       spawnBurst(enemy.x, enemy.y, enemy.color, '✦', 8);
       pushLog(
-        `Slain ${enemy.name}! (+${enemy.xpReward} XP, +${enemy.goldReward}g)`,
+        `Slain ${enemy.name}! (+${enemy.xpReward} XP, +${goldGain}g)`,
         'loot',
         nextP.turnsElapsed
       );
@@ -2262,7 +2589,7 @@ export default function App() {
             curP.companion.y = cPos.y;
           }
         }
-        computeVisibility(curZ, curP.x, curP.y, getSightRadius(curP, activeFlags));
+        computeVisibility(curZ, curP.x, curP.y, getSightRadius(curP, activeFlags, curZ));
         setPlayer(curP);
         setZones((prev) => ({ ...prev, [curZ.id]: curZ }));
         return;
@@ -2336,6 +2663,16 @@ export default function App() {
         const playerDotDmg = incomingDots.reduce((sum, s) => sum + Math.max(1, s.potency), 0);
         const dotLabels = incomingDots.map((s) => s.kind.toUpperCase()).join(' / ');
         curP.hp -= playerDotDmg;
+        // Phase 8 Tier 3 autopsy: a DoT tick is a damage source.
+        lastDamageRef.current = {
+          kind: 'dot',
+          name:
+            incomingDots[0].kind === 'burn'
+              ? 'Burn'
+              : incomingDots[0].kind === 'bleed'
+                ? 'Bleed'
+                : 'Poison',
+        };
         soundEngine.playPlayerHurt();
         spawnHitFlash(curP.x, curP.y, '#FB923C', 110);
         spawnFloating(curP.x, curP.y, `-${playerDotDmg} ${dotLabels}`, '#FB923C');
@@ -2346,6 +2683,25 @@ export default function App() {
       }
 
       const survivingIds = new Set(curZ.enemies.map((e) => e.id));
+
+      // Phase 8 Tier 2A: shared occupancy test for the behaviour brains
+      // (kite steps, lunge dashes) — a tile is free when no surviving enemy,
+      // no NPC, not the player and not the living companion stands on it.
+      // Reads curP/curZ at call time, so it tracks mid-loop movement.
+      const tileFreeForEnemy = (x: number, y: number): boolean =>
+        !(x === curP.x && y === curP.y) &&
+        !curZ.npcs.some((n) => n.x === x && n.y === y) &&
+        !curZ.enemies.some((o) => survivingIds.has(o.id) && o.x === x && o.y === y) &&
+        !(
+          curP.companion &&
+          curP.companion.hp > 0 &&
+          curP.companion.respawnCooldown === 0 &&
+          curP.companion.x === x &&
+          curP.companion.y === y
+        );
+      // Enemies conjured this round appear at the end of the board and do
+      // not act until the next round.
+      const freshSummonIds = new Set<string>();
 
       // Phase 3: handleEnemyDeath can refuse a Grave Husk's first death
       // (Deathless). When the "corpse" is still on the returned board, it
@@ -2405,10 +2761,14 @@ export default function App() {
               .sort((a, b) => a.hp - b.hp)[0];
 
             if (adjTarget) {
-              const baseCompDmg =
+              // Phase 8 Tier 3: Frail Companion scales the base hit
+              // through the challenges funnel (identity when inactive).
+              const baseCompDmg = companionDamageWithChallenges(
                 comp.kind === 'silverwind_lynx'
                   ? 6 + Math.floor(curP.level * 2.4) + Math.floor(curP.attributes.agility * 0.6)
-                  : 5 + Math.floor(curP.level * 2.0) + Math.floor(curP.attributes.arcana * 0.7);
+                  : 5 + Math.floor(curP.level * 2.0) + Math.floor(curP.attributes.arcana * 0.7),
+                getCurrentChallenges()
+              );
               const isCompCrit = comp.kind === 'silverwind_lynx' && Math.random() < 0.2;
               const bestiaryMult = computeBestiaryPerks(activeFlags).damageMultiplierVs(adjTarget.archetype);
               const finalCompDmg = Math.max(
@@ -2484,6 +2844,17 @@ export default function App() {
         if (playerDied) break;
         const enemy = curZ.enemies[idx];
         if (!survivingIds.has(enemy.id)) continue;
+        if (freshSummonIds.has(enemy.id)) continue;
+
+        // Phase 8 Tier 2A: tick summon/mend cooldowns (same cadence as
+        // skill cooldowns below).
+        if (enemy.intentCooldowns) {
+          for (const cdKey of ['summon', 'mend'] as const) {
+            const rem = enemy.intentCooldowns[cdKey] ?? 0;
+            if (rem <= 1) delete enemy.intentCooldowns[cdKey];
+            else enemy.intentCooldowns[cdKey] = rem - 1;
+          }
+        }
 
         if (enemy.skillCooldowns) {
           for (const skKey of Object.keys(enemy.skillCooldowns) as SkillId[]) {
@@ -2556,10 +2927,139 @@ export default function App() {
           const intentDmg = enemy.intent.damage;
           const intentType = enemy.intent.type;
           const intentSkill = enemy.intent.skillId;
+          const intentTiles = enemy.intent.targetTiles;
+          const intentTargetId = enemy.intent.targetEnemyId;
+          const intentHeal = enemy.intent.healAmount;
           enemy.intent = undefined;
 
           if (intentSkill) {
             enemy.skillCooldowns = { ...(enemy.skillCooldowns ?? {}), [intentSkill]: 4 };
+          }
+
+          // Phase 8 Tier 2A: summon fires — a plague_rat (a "Summoned Mire
+          // Mite") manifests on the snapshotted tile if it is still free.
+          // The mite is flagged summoned/summonerId with zeroed rewards;
+          // handleEnemyDeath honours the flag and pays out nothing for it.
+          if (intentType === 'summon') {
+            enemy.intentCooldowns = {
+              ...(enemy.intentCooldowns ?? {}),
+              summon: SUMMON_COOLDOWN_TURNS,
+            };
+            const tile = intentTiles[0];
+            if (tile && curZ.tiles[tile.y]?.[tile.x]?.walkable && tileFreeForEnemy(tile.x, tile.y)) {
+              const mite: Enemy = {
+                ...createEnemy('plague_rat', tile.x, tile.y, curZ.depth),
+                name: 'Summoned Mire Mite',
+                summoned: true,
+                summonerId: enemy.id,
+                alerted: true,
+                xpReward: 0,
+                goldReward: 0,
+              };
+              curZ.enemies.push(mite);
+              survivingIds.add(mite.id);
+              freshSummonIds.add(mite.id);
+              soundEngine.playSpell();
+              spawnBurst(tile.x, tile.y, '#84CC16', '✦', 7);
+              spawnFloating(tile.x, tile.y, 'SUMMONED!', '#84CC16');
+              pushLog(`${enemy.name} summons a Mire Mite!`, 'danger', curP.turnsElapsed);
+            } else {
+              pushLog(
+                `${enemy.name}'s summoning fizzles — no room for the mite to manifest.`,
+                'neutral',
+                curP.turnsElapsed
+              );
+            }
+            continue;
+          }
+
+          // Phase 8 Tier 2A: mend fires — re-validate the primed target
+          // (alive, on the board, within fire range) and heal it. Reaching
+          // this point at all means the cultist survived unstunned: death
+          // removes it from the loop and a Bash stun deleted the intent.
+          if (intentType === 'mend') {
+            enemy.intentCooldowns = {
+              ...(enemy.intentCooldowns ?? {}),
+              mend: MEND_COOLDOWN_TURNS,
+            };
+            const mendRes = resolveMend(enemy, intentTargetId, curZ, intentHeal ?? 0);
+            if (mendRes) {
+              mendRes.target.hp = Math.min(
+                mendRes.target.maxHp,
+                mendRes.target.hp + mendRes.heal
+              );
+              soundEngine.playSpell();
+              spawnBurst(mendRes.target.x, mendRes.target.y, '#4ADE80', '✚', 6);
+              spawnFloating(mendRes.target.x, mendRes.target.y, `+${mendRes.heal} MEND`, '#4ADE80');
+              pushLog(
+                `${enemy.name}'s mending restores ${mendRes.heal} HP to ${mendRes.target.name}!`,
+                'danger',
+                curP.turnsElapsed
+              );
+            } else {
+              pushLog(
+                `${enemy.name}'s mending unravels — no wounded ally within reach.`,
+                'neutral',
+                curP.turnsElapsed
+              );
+            }
+            continue;
+          }
+
+          // Phase 8 Tier 2A: lunge fires — the stalker dashes along the
+          // primed line to the last free tile (the player's tile is never
+          // free, so a connecting dash ends adjacent). Damage lands ONLY if
+          // the player still stands on the end tile; anything else WHIFFs.
+          if (intentType === 'lunge') {
+            const endTile = intentTiles[intentTiles.length - 1];
+            const playerOnEnd = !!endTile && curP.x === endTile.x && curP.y === endTile.y;
+            const dest = lungeDestination(curZ, intentTiles, tileFreeForEnemy);
+            if (dest && (dest.x !== enemy.x || dest.y !== enemy.y)) {
+              spawnBurst(enemy.x, enemy.y, '#A855F7', '»', 5);
+              enemy.x = dest.x;
+              enemy.y = dest.y;
+              spawnBurst(dest.x, dest.y, '#A855F7', '»', 5);
+            }
+            if (playerOnEnd) {
+              const dodged = Math.random() * 100 < derivedStats.dodgeChance;
+              if (dodged) {
+                spawnFloating(curP.x, curP.y, 'DODGE', '#4EA885');
+                pushLog(`You evaded ${enemy.name}'s ${intentLabel}!`, 'combat', curP.turnsElapsed);
+                const evRank = curP.skills.evasive_instinct ?? 0;
+                if (evRank >= 2) {
+                  curP.mana = Math.min(derivedStats.maxMana, curP.mana + 2);
+                }
+              } else {
+                const mitigated = Math.max(2, intentDmg - Math.round(derivedStats.def * 0.7));
+                curP.hp -= mitigated;
+                lastDamageRef.current = {
+                  kind: 'telegraph',
+                  name: enemy.name,
+                  detail: 'lunging strike',
+                };
+                soundEngine.playPlayerHurt();
+                triggerShake(180);
+                spawnHitFlash(curP.x, curP.y, '#EF4444', 150);
+                spawnBurst(curP.x, curP.y, '#EF4444', '!', 6);
+                spawnFloating(curP.x, curP.y, `-${mitigated}`, '#EF4444');
+                pushLog(
+                  `${enemy.name} lands ${intentLabel} for ${mitigated} dmg!`,
+                  'danger',
+                  curP.turnsElapsed
+                );
+                if (hasProdigy(curP, 'spine_of_world')) {
+                  applyStatus(curP.statuses, 'spine_guard', 3, 1);
+                }
+                if (checkPlayerFatal()) {
+                  playerDied = true;
+                  break;
+                }
+              }
+            } else {
+              spawnFloating(enemy.x, enemy.y, 'WHIFF', '#94A3B8');
+              pushLog(`You sidestepped ${enemy.name}'s telegraphed attack.`, 'neutral', curP.turnsElapsed);
+            }
+            continue;
           }
 
           if (intentSkill === 'shadowstep') {
@@ -2619,6 +3119,11 @@ export default function App() {
             } else {
               const mitigated = Math.max(2, intentDmg - Math.round(derivedStats.def * 0.7));
               curP.hp -= mitigated;
+              lastDamageRef.current = {
+                kind: 'telegraph',
+                name: enemy.name,
+                detail: telegraphDetailFor(intentType, intentSkill),
+              };
               soundEngine.playPlayerHurt();
               triggerShake(180);
               spawnHitFlash(curP.x, curP.y, '#EF4444', 150);
@@ -2665,13 +3170,37 @@ export default function App() {
           spawnFloating(
             enemy.x,
             enemy.y,
-            newIntent.type === 'enemy_skill' ? newIntent.label.toUpperCase() : 'WINDUP!',
-            newIntent.type === 'enemy_skill' ? '#C084FC' : '#FBBF24'
+            newIntent.type === 'enemy_skill' || newIntent.type === 'summon' || newIntent.type === 'mend'
+              ? newIntent.label.toUpperCase()
+              : 'WINDUP!',
+            newIntent.type === 'enemy_skill'
+              ? '#C084FC'
+              : newIntent.type === 'summon'
+                ? '#84CC16'
+                : newIntent.type === 'mend'
+                  ? '#4ADE80'
+                  : '#FBBF24'
           );
           continue;
         }
 
-        if (dist === 1) {
+        // Phase 8 Tier 2A: a kiting caster adjacent to the player retreats
+        // into its range band instead of bumping, when a legal step improves
+        // its distance — and that retreat is its whole turn (the branches
+        // below all stand down). Cornered (no improving step) it falls
+        // through to the bump below — and its hex is now choosable at
+        // dist 1, so a cornered caster usually casts point-blank instead.
+        let kited = false;
+        if (dist === 1 && isKitingCaster(enemy)) {
+          const plan = planCasterMove(curZ, enemy, curP, tileFreeForEnemy);
+          if (plan.kind === 'step') {
+            enemy.x = plan.x;
+            enemy.y = plan.y;
+            kited = true;
+          }
+        }
+
+        if (dist === 1 && !kited) {
           const dodged = Math.random() * 100 < derivedStats.dodgeChance;
           if (dodged) {
             spawnFloating(curP.x, curP.y, 'DODGE', '#4EA885');
@@ -2699,6 +3228,7 @@ export default function App() {
             const rawAtk = chilled ? Math.round(enemy.atk * 0.65) : enemy.atk;
             const dmg = Math.max(1, rawAtk - Math.round(derivedStats.def * 0.65));
             curP.hp -= dmg;
+            lastDamageRef.current = { kind: 'basic', name: enemy.name };
             soundEngine.playPlayerHurt();
             triggerShake(110);
             spawnHitFlash(curP.x, curP.y, '#EF4444', 130);
@@ -2732,6 +3262,7 @@ export default function App() {
             }
           }
         } else if (
+          !kited &&
           curP.companion &&
           curP.companion.hp > 0 &&
           curP.companion.respawnCooldown === 0 &&
@@ -2752,9 +3283,17 @@ export default function App() {
             spawnBurst(comp.x, comp.y, '#94A3B8', '✕', 5);
             pushLog(`${comp.name} collapses! Will reform in 8 turns or upon returning to town.`, 'danger', curP.turnsElapsed);
           }
-        } else {
+        } else if (!kited) {
+          // Phase 8 Tier 2A: a kiting caster inside its preferred band holds
+          // position and casts; beyond the band it approaches as normal.
+          const casterPlan = isKitingCaster(enemy)
+            ? planCasterMove(curZ, enemy, curP, tileFreeForEnemy)
+            : null;
           // Move 1 step toward player
-          const step = findPathNextStep(curZ, enemy.x, enemy.y, curP.x, curP.y);
+          const step =
+            casterPlan?.kind === 'hold'
+              ? null
+              : findPathNextStep(curZ, enemy.x, enemy.y, curP.x, curP.y);
           const occupiedByComp =
             curP.companion &&
             curP.companion.hp > 0 &&
@@ -2762,6 +3301,7 @@ export default function App() {
             step &&
             step.x === curP.companion.x &&
             step.y === curP.companion.y;
+          let movedThisTurn = false;
           if (
             step &&
             !(step.x === curP.x && step.y === curP.y) &&
@@ -2770,13 +3310,26 @@ export default function App() {
           ) {
             enemy.x = step.x;
             enemy.y = step.y;
+            movedThisTurn = true;
+          }
+          // Phase 8 fix pack: the Shadow Stalker's lunge gets a second
+          // priming chance at the END of its move — the turn-start roll in
+          // chooseEnemyIntent almost never found a line, because the
+          // stalker's approach step closes it into melee first. The pure
+          // decision lives in combat.ts (shouldPrimeLungeAfterMove); the
+          // primed intent is the same telegraphed lunge and fires next
+          // turn under the usual snapshot/WHIFF rules.
+          const postMoveLunge = shouldPrimeLungeAfterMove(curZ, enemy, curP, movedThisTurn, Math.random());
+          if (postMoveLunge) {
+            enemy.intent = postMoveLunge;
+            spawnFloating(enemy.x, enemy.y, 'WINDUP!', '#FBBF24');
           }
         }
       }
 
       curZ.enemies = curZ.enemies.filter((e) => survivingIds.has(e.id));
       curP.firstStrikeReady = curZ.enemies.every((e) => !e.alerted);
-      computeVisibility(curZ, curP.x, curP.y, getSightRadius(curP, activeFlags));
+      computeVisibility(curZ, curP.x, curP.y, getSightRadius(curP, activeFlags, curZ));
 
       setPlayer(curP);
       setZones((prev) => ({ ...prev, [curZ.id]: curZ }));
@@ -3153,6 +3706,19 @@ export default function App() {
           pushLog("Malakor's cinder ward seals the Abyssal Descent. Defeat the Sovereign first!", 'quest');
           return true;
         }
+        // Audit leftover (Nov 14): Serath gates the Sanctum the same way
+        // Malakor gates the Abyss — he stands beside the Floor 5 stairs,
+        // so without this ward the descent could be walked straight past
+        // him. The ward lifts when his defeat is recorded.
+        if (isSerathGateSealed(z.id, worldFlags)) {
+          setPlayer(p);
+          setZones(mergedZones);
+          pushLog(
+            "Inquisitor Serath's cinder ward seals the descent to the Sanctum. Break the Inquisitor first!",
+            'quest'
+          );
+          return true;
+        }
         transitionToZone(`dungeon_${nextDepth}` as ZoneId, 'spawn', p, mergedZones);
         return true;
       }
@@ -3353,7 +3919,7 @@ export default function App() {
                     chebyshev(e.x, e.y, tx, ty) <= 8 ? { ...e, alerted: true } : e
                   ),
                 };
-                  computeVisibility(updatedZone, p.x, p.y, getSightRadius(p, worldFlags));
+                  computeVisibility(updatedZone, p.x, p.y, getSightRadius(p, worldFlags, updatedZone));
                 setZones((prev) => ({ ...prev, [z.id]: updatedZone }));
                 triggerShake(130);
                 pushLog('Vault unsealed! Ancient guardians stir within the chamber.', 'danger');
@@ -3398,6 +3964,7 @@ export default function App() {
             `Recovered Rowan’s Stolen Satchel (+${foundGold}g & ${foundItem.name})! Return to Rowan at Silverbridge.`,
             'quest'
           );
+          if (hasEquippableLoot([foundItem])) pushLog(LOOT_COMPARE_PROMPT, 'loot');
           return true;
         }
         if (tile.interactId?.endsWith('_boss_chest')) {
@@ -3411,12 +3978,13 @@ export default function App() {
             `Side-Dungeon Hoard claimed: +${foundGold}g, +6 Glyph Dust, and ${foundItem.name}!`,
             'loot'
           );
+          if (hasEquippableLoot([foundItem])) pushLog(LOOT_COMPARE_PROMPT, 'loot');
           return true;
         }
         if (tile.interactId === 'vault_chest') {
           const foundGold = 60 + z.depth * 24 + Math.floor(Math.random() * 25);
-          const foundItem = generateProceduralItem(z.depth + 2, { minRarity: 'Epic' });
-          const foundInsc = generateInscription(z.depth + 1, { minRarity: 'Rare' });
+          const foundItem = generateProceduralItem(z.depth + 2, { minRarity: 'Epic', lootBonus: mutatorLootBonus(z.mutator) });
+          const foundInsc = generateInscription(z.depth + 1, { minRarity: 'Rare', lootBonus: mutatorLootBonus(z.mutator) });
           let nextP = addItemToPlayer({ ...p, gold: p.gold + foundGold }, foundItem);
           nextP = addItemToPlayer(nextP, foundInsc);
           setPlayer(nextP);
@@ -3426,20 +3994,27 @@ export default function App() {
             `Vault Reliquary looted: +${foundGold}g, ${foundItem.name}, and ${foundInsc.name}!`,
             'loot'
           );
+          if (hasEquippableLoot([foundItem, foundInsc])) pushLog(LOOT_COMPARE_PROMPT, 'loot');
           return true;
         }
         const foundGold = 18 + z.depth * 14 + Math.floor(Math.random() * 14);
-        const foundItem = generateProceduralItem(z.depth + 1, { minRarity: 'Uncommon' });
+        const foundItem = generateProceduralItem(z.depth + 1, { minRarity: 'Uncommon', lootBonus: mutatorLootBonus(z.mutator) });
         let nextP = addItemToPlayer({ ...p, gold: p.gold + foundGold }, foundItem);
+        const grantedItems: Item[] = [foundItem];
         if (Math.random() < 0.5) {
-          nextP = addItemToPlayer(nextP, createConsumable('heal_potion', 1));
+          const potion = createConsumable('heal_potion', 1);
+          nextP = addItemToPlayer(nextP, potion);
+          grantedItems.push(potion);
         } else if (Math.random() < 0.35) {
-          nextP = addItemToPlayer(nextP, generateInscription(z.depth, { minRarity: 'Uncommon' }));
+          const insc = generateInscription(z.depth, { minRarity: 'Uncommon', lootBonus: mutatorLootBonus(z.mutator) });
+          nextP = addItemToPlayer(nextP, insc);
+          grantedItems.push(insc);
         }
         setPlayer(nextP);
         setZones((prev) => ({ ...prev, [z.id]: { ...z } }));
         spawnBurst(tx, ty, '#FBBF24', '$', 7);
         pushLog(`Opened chest: +${foundGold}g and ${foundItem.name}!`, 'loot');
+        if (hasEquippableLoot(grantedItems)) pushLog(LOOT_COMPARE_PROMPT, 'loot');
         return true;
       }
 
@@ -3493,7 +4068,7 @@ export default function App() {
         setSpecialPrompt({
           title: 'Glyph Shrine of Renewal',
           subtitle: 'Restorative & Build Respec Altar',
-          body: 'Ancient runes hum around this stone altar. You may restore your vigor or clear your learned attributes and skills to test an entirely new build.',
+          body: 'Ancient runes hum around this stone altar. You may restore your vigor, clear your learned attributes and skills to test an entirely new build, or leave a gold offering for a blessing — one at a time, and the shrine asks more with every offering in a cycle.',
           options: [
             {
               id: 'heal',
@@ -3534,6 +4109,49 @@ export default function App() {
                 setSpecialPrompt(null);
               },
             },
+            // Phase 8 Tier 2B: shrine blessings — a repeatable gold sink.
+            // One blessing at a time; the offering doubles with each
+            // purchase this cycle (150 / 300 / 600 / ...).
+            ...BLESSING_IDS.map((blessingId: BlessingId) => {
+              const def = BLESSING_DEFS[blessingId];
+              const purchases = player.blessingPurchases ?? 0;
+              const cost = blessingCost(purchases);
+              return {
+                id: `blessing_${blessingId}`,
+                label: `${def.name} — ${def.effectLabel} for ${BLESSING_DURATION_TURNS} turns (Offering: ${cost}g)`,
+                tone: 'secondary' as const,
+                disabled: !canPurchaseBlessing(player.gold, purchases),
+                onSelect: () => {
+                  setPlayer((cur) => {
+                    const curPurchases = cur.blessingPurchases ?? 0;
+                    const curCost = blessingCost(curPurchases);
+                    if (!canPurchaseBlessing(cur.gold, curPurchases)) return cur;
+                    const nextP: PlayerState = {
+                      ...cur,
+                      gold: cur.gold - curCost,
+                      blessingPurchases: curPurchases + 1,
+                      statuses: applyBlessing(cur.statuses, blessingId),
+                    };
+                    const d = computeDerivedStats(nextP, worldFlags);
+                    nextP.maxHp = d.maxHp;
+                    nextP.maxMana = d.maxMana;
+                    // Vigor heals the 10 HP its blessing grants, on purchase.
+                    nextP.hp =
+                      blessingId === 'vigor'
+                        ? Math.min(d.maxHp, cur.hp + def.potency)
+                        : Math.min(cur.hp, d.maxHp);
+                    nextP.mana = Math.min(cur.mana, d.maxMana);
+                    return nextP;
+                  });
+                  soundEngine.playSpell();
+                  pushLog(
+                    `${def.name} settles over you (${def.effectLabel}, ${BLESSING_DURATION_TURNS} turns). The shrine's hunger deepens — the next offering will cost ${blessingCost((player.blessingPurchases ?? 0) + 1)}g.`,
+                    'arcane'
+                  );
+                  setSpecialPrompt(null);
+                },
+              };
+            }),
             {
               id: 'close',
               label: 'Step away',
@@ -3724,7 +4342,7 @@ export default function App() {
 
       if (tile.kind === 'waystone' && !tile.used) {
         soundEngine.playWaystone();
-        computeVisibility(z, p.x, p.y, getSightRadius(p, worldFlags));
+        computeVisibility(z, p.x, p.y, getSightRadius(p, worldFlags, z));
         setPlayer(p);
         setZones((prev) => ({ ...prev, [z.id]: { ...z } }));
         const recordWaystone = (attuneBonusP: PlayerState, logMsg: string) => {
@@ -3831,12 +4449,18 @@ export default function App() {
 
       if (tile.kind === 'forgotten_forge' && !tile.used) {
         soundEngine.playForge();
-        computeVisibility(z, p.x, p.y, getSightRadius(p, worldFlags));
+        computeVisibility(z, p.x, p.y, getSightRadius(p, worldFlags, z));
         setPlayer(p);
         setZones((prev) => ({ ...prev, [z.id]: { ...z } }));
-        const maxUpgradeLevel = (worldFlags.townUpgrades?.smithy ?? 0) >= 2 ? 4 : 3;
         const equipTarget = p.equipped.weapon ?? p.equipped.armor ?? p.equipped.ring ?? p.equipped.amulet;
-        const canTemper = Boolean(equipTarget && equipTarget.upgradeLevel < maxUpgradeLevel);
+        // Phase 8 Tier 2B: the cap comes from temperCapFor — a Masterwork
+        // item's cap is frozen at its level, so the forge cannot push it
+        // further (identical outcomes to the old smithy 3/4 check in every
+        // other case).
+        const canTemper = Boolean(
+          equipTarget &&
+            equipTarget.upgradeLevel < temperCapFor(equipTarget, worldFlags.townUpgrades?.smithy ?? 0)
+        );
         const freeTemper = p.attributes.might >= 3;
         const markForgeUsed = (updatedPlayer: PlayerState) => {
           tile.used = true;
@@ -3889,7 +4513,7 @@ export default function App() {
             const crafted =
               Math.random() < 0.65
                 ? createRandomSetRelic(z.depth)
-                : generateProceduralItem(z.depth + 1, { minRarity: 'Epic' });
+                : generateProceduralItem(z.depth + 1, { minRarity: 'Epic', lootBonus: mutatorLootBonus(z.mutator) });
             const nextP = addItemToPlayer({ ...p, gold: p.gold - 35 }, crafted);
             const finalP = markForgeUsed(nextP);
             setPlayer(finalP);
@@ -3924,7 +4548,7 @@ export default function App() {
 
       if (tile.kind === 'cursed_altar' && !tile.used) {
         soundEngine.playSpell();
-        computeVisibility(z, p.x, p.y, getSightRadius(p, worldFlags));
+        computeVisibility(z, p.x, p.y, getSightRadius(p, worldFlags, z));
         setPlayer(p);
         setZones((prev) => ({ ...prev, [z.id]: { ...z } }));
         const markAltarUsed = (updatedPlayer: PlayerState) => {
@@ -3959,7 +4583,7 @@ export default function App() {
                 const reward =
                   Math.random() < 0.7
                     ? createRandomSetRelic(z.depth)
-                    : generateProceduralItem(z.depth + 1, { minRarity: 'Epic' });
+                    : generateProceduralItem(z.depth + 1, { minRarity: 'Epic', lootBonus: mutatorLootBonus(z.mutator) });
                 const nextP = addItemToPlayer(
                   { ...p, hp: Math.max(1, p.hp - bloodCost), glyphDust: p.glyphDust + 14 },
                   reward
@@ -4397,6 +5021,28 @@ export default function App() {
         return;
       }
 
+      // Phase 8: while a hotbar skill is armed, a direction press toward a
+      // valid target tile confirms the cast (the click/tap path is not the
+      // only confirm anymore). Invalid tiles fall through to the normal
+      // move/bump below — the input is never eaten. Auto-Explore also steps
+      // through here, but it halts on any visible enemy and the resolver
+      // requires a visible target tile, so exploration is unaffected.
+      if (armedSkill) {
+        const resolution = resolveDirectionalSkillCast({
+          skillId: armedSkill,
+          rank: player.skills[armedSkill] ?? 0,
+          playerX: player.x,
+          playerY: player.y,
+          dx,
+          dy,
+          zone: currentZone,
+        });
+        if (resolution.kind === 'cast') {
+          executeSkill(armedSkill, resolution.targetX, resolution.targetY);
+          return;
+        }
+      }
+
       const tx = player.x + dx;
       const ty = player.y + dy;
       if (tx < 0 || ty < 0 || tx >= currentZone.width || ty >= currentZone.height) return;
@@ -4586,6 +5232,7 @@ export default function App() {
           tile.used = true;
           const trapDmg = 5 + nextZ.depth * 2;
           nextP.hp -= trapDmg;
+          lastDamageRef.current = { kind: 'trap', name: 'Spike Snare' };
           soundEngine.playTrap();
           triggerShake(130);
           spawnFloating(tx, ty, `-${trapDmg} TRAP`, '#EF4444');
@@ -4606,6 +5253,7 @@ export default function App() {
           tile.used = true;
           const dartDmg = 4 + nextZ.depth * 2;
           nextP.hp -= dartDmg;
+          lastDamageRef.current = { kind: 'trap', name: 'Venom Dart Snare' };
           applyStatus(nextP.statuses, 'poison', 3, 3);
           soundEngine.playTrap();
           triggerShake(130);
@@ -4632,6 +5280,7 @@ export default function App() {
           } else {
             const dmg = 3 + nextZ.depth;
             nextP.hp -= dmg;
+            lastDamageRef.current = { kind: 'environment', name: 'Blight Spore Pool' };
             applyStatus(nextP.statuses, 'poison', 3, 3);
             soundEngine.playHazard();
             triggerShake(110);
@@ -4648,6 +5297,7 @@ export default function App() {
           } else {
             const dmg = 3 + nextZ.depth;
             nextP.hp -= dmg;
+            lastDamageRef.current = { kind: 'environment', name: 'Crypt Frost Vent' };
             applyStatus(nextP.statuses, 'chilled', 2, 1);
             soundEngine.playHazard();
             triggerShake(110);
@@ -4664,6 +5314,7 @@ export default function App() {
           } else {
             const dmg = 4 + nextZ.depth;
             nextP.hp -= dmg;
+            lastDamageRef.current = { kind: 'environment', name: 'Molten Ember Crust' };
             applyStatus(nextP.statuses, 'burn', 2, 3);
             soundEngine.playHazard();
             triggerShake(120);
@@ -4683,6 +5334,7 @@ export default function App() {
             const dmg = 4 + nextZ.depth;
             const drain = Math.min(nextP.mana, 4);
             nextP.hp -= dmg;
+            lastDamageRef.current = { kind: 'environment', name: 'Arcane Shock Rune' };
             nextP.mana -= drain;
             soundEngine.playHazard();
             triggerShake(125);
@@ -4754,7 +5406,7 @@ export default function App() {
 
       if ((nextP.hasteSteps ?? 0) > 0) {
         nextP.hasteSteps = (nextP.hasteSteps ?? 1) - 1;
-        computeVisibility(nextZ, nextP.x, nextP.y, getSightRadius(nextP, worldFlags));
+        computeVisibility(nextZ, nextP.x, nextP.y, getSightRadius(nextP, worldFlags, nextZ));
         setPlayer(nextP);
         setZones((prev) => ({ ...prev, [nextZ.id]: nextZ }));
         spawnFloating(tx, ty, 'HASTE', '#4EA885');
@@ -4781,6 +5433,8 @@ export default function App() {
       specialPrompt,
       triggerShake,
       worldFlags,
+      armedSkill,
+      executeSkill,
     ]
   );
 
@@ -5153,6 +5807,17 @@ export default function App() {
       const item = player.inventory[idx];
       if (item.category !== 'consumable' || !item.consumableKind) return;
 
+      // Phase 8 Tier 3: No Draughts seals the drinkable vials for the
+      // whole run — the use is refused (nothing consumed, no turn spent)
+      // with a clear log line. Other consumables are unaffected.
+      if (!canUseConsumableWithChallenges(item.consumableKind, getCurrentChallenges())) {
+        pushLog(
+          'No Draughts: the challenge seals your vials — draughts and vials cannot be drunk on this run.',
+          'danger'
+        );
+        return;
+      }
+
       const nextInv = [...player.inventory];
       if ((item.quantity ?? 1) > 1) {
         nextInv[idx] = { ...item, quantity: (item.quantity ?? 1) - 1 };
@@ -5204,7 +5869,7 @@ export default function App() {
           const dest = candidates[Math.floor(Math.random() * candidates.length)];
           nextP.x = dest.x;
           nextP.y = dest.y;
-          computeVisibility(nextZ, nextP.x, nextP.y, getSightRadius(nextP, worldFlags));
+          computeVisibility(nextZ, nextP.x, nextP.y, getSightRadius(nextP, worldFlags, nextZ));
           soundEngine.playSpell();
           spawnBurst(dest.x, dest.y, '#60A5FA', '?', 6);
           pushLog('Phased to a safer stone tile!', 'arcane');
@@ -6190,15 +6855,24 @@ export default function App() {
     const target = isEquipped
       ? Object.values(player.equipped).find((i) => i?.id === itemId)
       : player.inventory.find((i) => i.id === itemId);
+    if (!target) return;
     const smithyLv = worldFlags.townUpgrades?.smithy ?? 0;
-    const maxUpgrade = smithyLv >= 2 ? 4 : 3;
-    if (!target || target.upgradeLevel >= maxUpgrade) return;
+    // Phase 8 Tier 2B: a weapon/armor AT the normal cap may take one
+    // Masterwork step beyond it, at the steep flat Masterwork price (no
+    // smithy discount). Everything else flows through the ordinary temper
+    // path, capped by temperCapFor.
+    const masterworkStep = canMasterworkTemper(target, smithyLv);
+    if (!masterworkStep && target.upgradeLevel >= temperCapFor(target, smithyLv)) return;
     const discount = smithyLv >= 1 ? 0.75 : 1;
-    const goldCost = Math.max(8, Math.round((25 + target.upgradeLevel * 25) * discount));
-    const dustCost = Math.max(3, Math.round((8 + target.upgradeLevel * 8) * discount));
+    const goldCost = masterworkStep
+      ? MASTERWORK_TEMPER_COST.gold
+      : Math.max(8, Math.round((25 + target.upgradeLevel * 25) * discount));
+    const dustCost = masterworkStep
+      ? MASTERWORK_TEMPER_COST.dust
+      : Math.max(3, Math.round((8 + target.upgradeLevel * 8) * discount));
     if (player.gold < goldCost || player.glyphDust < dustCost) return;
 
-    const upgraded = upgradeEquipmentItem(target);
+    const upgraded = masterworkStep ? applyMasterworkTemper(target) : upgradeEquipmentItem(target);
     soundEngine.playLevelUp();
     setPlayer((prev) => {
       const next: PlayerState = {
@@ -6218,7 +6892,10 @@ export default function App() {
       next.mana = Math.min(next.mana, d.maxMana);
       return next;
     });
-    pushLog(`Tempered ${upgraded.name}!`, 'arcane');
+    pushLog(
+      masterworkStep ? `Masterwork! ${upgraded.name} is tempered beyond the forge's usual limits!` : `Tempered ${upgraded.name}!`,
+      'arcane'
+    );
   };
 
   const handleEnchantItem = (itemId: string, isEquipped: boolean, runeId: RuneEnchantId) => {
@@ -6270,8 +6947,12 @@ export default function App() {
 
     const smithyLv = worldFlags.townUpgrades?.smithy ?? 0;
     const discount = smithyLv >= 1 ? 0.75 : 1;
-    const goldCost = Math.max(10, Math.round(25 * discount));
-    const dustCost = Math.max(4, Math.round(8 * discount));
+    // Phase 8 Tier 2B: the reforge price scales with the item's rarity
+    // (Rare 65g / Epic 100g / Relic 180g before the smithy discount);
+    // dust stays a flat 8. See rerollAffixCost in game/loot.ts.
+    const reforgePrice = rerollAffixCost(target.rarity);
+    const goldCost = Math.max(10, Math.round(reforgePrice.gold * discount));
+    const dustCost = Math.max(4, Math.round(reforgePrice.dust * discount));
     if (player.gold < goldCost || player.glyphDust < dustCost) return;
 
     const reforged = rerollEquipmentAffix(target);
@@ -6326,6 +7007,16 @@ export default function App() {
     pushLog(`${def.name} upgraded to Tier ${curLv + 1}!`, 'quest');
   };
 
+  // Phase 8 fix pack: the destructive-action confirmation renders above
+  // whichever screen requested it (Title Screen, Ending / game-over).
+  const confirmModalEl = pendingConfirm ? (
+    <ConfirmModal
+      pending={pendingConfirm}
+      onConfirm={resolvePendingConfirm}
+      onCancel={cancelPendingConfirm}
+    />
+  ) : null;
+
   if (gameState === 'TITLE_MENU') {
     const localSummaries: Partial<Record<SaveSlotId, LocalSlotSummary>> = {};
     for (const s of SAVE_SLOTS) {
@@ -6351,6 +7042,7 @@ export default function App() {
           onSignIn={handleSignInGoogle}
           onSignOut={handleSignOutGoogle}
           onStartNew={handleStartNew}
+          lifetime={lifetime}
           onContinueLocal={handleContinueSaved}
           onContinueCloud={handleContinueCloud}
           onDeleteSlot={handleDeleteSlot}
@@ -6378,6 +7070,7 @@ export default function App() {
           />
         )}
         {showCredits && <CreditsScreen onClose={() => setShowCredits(false)} />}
+        {confirmModalEl}
       </>
     );
   }
@@ -6501,6 +7194,11 @@ export default function App() {
                 <p className="text-[11px] text-amber-300/90 mt-1 leading-snug">
                   {zoneBanner.tactical}
                 </p>
+                {zoneBanner.mutatorLine && (
+                  <p className="text-[11px] sm:text-xs text-fuchsia-300 mt-1 leading-snug font-medium">
+                    {zoneBanner.mutatorLine}
+                  </p>
+                )}
               </div>
               <X className="w-3.5 h-3.5 text-slate-500 shrink-0 mt-0.5" />
             </div>
@@ -6780,6 +7478,7 @@ export default function App() {
           worldFlags={worldFlags}
           playTimeMs={playTimeBaseRef.current + (Date.now() - runStartedAtRef.current)}
           ngPlusCycle={ngPlusCycle}
+          challengesLine={challengeDisplayLine(challenges)}
           onAscend={handleAscendNgPlus}
           onContinueAbyss={() => {
             pushLog(
@@ -6808,10 +7507,32 @@ export default function App() {
           difficultyLabel={DIFFICULTY_INFO[difficulty].label}
           ngPlusCycle={ngPlusCycle}
           hardcore={hardcore}
+          runSeed={runSeed}
+          challengesLine={challengeDisplayLine(challenges)}
+          deathCause={
+            gameState === 'GAME_OVER'
+              ? buildDeathCause({
+                  lastDamage: lastDamageRef.current,
+                  zoneName: currentZone.name,
+                  depth: currentZone.depth,
+                })
+              : undefined
+          }
+          recapLine={formatRunRecap({
+            level: player.level,
+            cycle: ngPlusCycle,
+            deepestFloor: deepestDepthForZones(worldFlags.discoveredZones, currentZone.depth),
+            kills: player.kills,
+            gold: player.gold,
+            challenges,
+          })}
           authUser={authUser}
           cloudBusy={authBusy || cloudSaving}
           onSignIn={handleSignInGoogle}
-          canReturnToEnding={Boolean(worldFlags.malakorDefeated)}
+          canReturnToEnding={canOfferReturnToEnding({
+            malakorDefeated: Boolean(worldFlags.malakorDefeated),
+            isTown: currentZone.isTown,
+          })}
           onReturnToEnding={() => setGameState('VICTORY')}
           onResume={() => setGameState('PLAYING')}
           onSaveRun={async () => {
@@ -6831,6 +7552,8 @@ export default function App() {
               hardcore,
               deadAtMs: deathStampRef.current?.deadAtMs,
               deathNote: deathStampRef.current?.deathNote,
+              runSeed,
+              challenges: challenges.length > 0 ? [...challenges] : undefined,
             };
             const localOk = saveBundleToStorage(bundle, derived.buildTitle, activeSlot, true);
             const slotLabel = activeSlot.replace('_', ' ').toUpperCase();
@@ -6905,6 +7628,8 @@ export default function App() {
       )}
 
       {showCredits && <CreditsScreen onClose={() => setShowCredits(false)} />}
+
+      {confirmModalEl}
 
       {showHallOfFame && (
         <HallOfFameModal

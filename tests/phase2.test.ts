@@ -196,12 +196,19 @@ test('music theme: dungeons are tense, alerted bosses take over', () => {
 
 // ---------------------------------------------------------------- tutorial
 
-const baseline: TutorialBaseline = { x: 5, y: 5, kills: 0, consumableCount: 3 };
+const baseline: TutorialBaseline = {
+  x: 5,
+  y: 5,
+  kills: 0,
+  consumableCount: 3,
+  companionStance: 'aggressive',
+};
 const idleSignals: TutorialSignals = {
   x: 5,
   y: 5,
   kills: 0,
   consumableCount: 3,
+  companionStance: 'aggressive',
   dialogueOpen: false,
   anySkillOnCooldown: false,
   restedOrSaved: false,
@@ -219,9 +226,11 @@ test('tutorial: steps complete only on their own signal', () => {
 });
 
 test('tutorial: sequence covers the required coaching beats', () => {
+  // Phase 8: the 'companion' beat was added after 'fight' — the companion
+  // deals a large share of early damage and was never introduced before.
   assert.deepEqual(
     TUTORIAL_STEPS.map((s) => s.id),
-    ['move', 'talk', 'fight', 'skills', 'potion', 'rest']
+    ['move', 'talk', 'fight', 'companion', 'skills', 'potion', 'rest']
   );
 });
 

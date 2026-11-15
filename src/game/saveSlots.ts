@@ -15,9 +15,12 @@
 // The pure parse/validate logic takes raw strings / an injectable storage
 // so it is unit-testable without a DOM (same pattern as settings.ts).
 
+import { ChallengeId, normalizeChallenges } from './challenges';
 import { DifficultyTier, normalizeCycle, normalizeDifficulty } from './difficulty';
+import { normalizeRunSeed } from './rng';
 import { StorageLike } from './settings';
 import {
+  GameState,
   Item,
   LogEntry,
   PlayerState,
@@ -69,6 +72,13 @@ export interface SavedBundle {
   /** Short human-readable death note (floor / zone / cycle) recorded with
    *  deadAtMs for the Title Screen's fallen-slot line. */
   deathNote?: string;
+  /** Run seed (Phase 8 Tier 3). Every new run carries one (player-supplied
+   *  or generated at creation); it governs dungeon-floor generation only.
+   *  Absent on pre-Tier-3 bundles => the unseeded legacy path. */
+  runSeed?: string;
+  /** Challenge modifier ids chosen at run creation (Phase 8 Tier 3).
+   *  Absent on pre-Tier-3 bundles => no challenges. */
+  challenges?: string[];
 }
 
 export function getLocalSlotKey(slotId: SaveSlotId): string {
@@ -93,6 +103,24 @@ export function corruptSlotMessage(): string {
 
 export function futureVersionMessage(version: number): string {
   return `This save was written by a newer version of ElfStory (save format v${version}; this build reads up to v${SAVE_VERSION}) and cannot be loaded here.`;
+}
+
+/** Display label for a save slot ("Slot 1" / "Slot 2" / "Slot 3"). */
+export function saveSlotLabel(slotId: SaveSlotId): string {
+  return slotId === 'slot_1' ? 'Slot 1' : slotId === 'slot_2' ? 'Slot 2' : 'Slot 3';
+}
+
+/**
+ * Phase 8 fix pack: the destructive-action confirmations moved from native
+ * window.confirm to the in-game ConfirmModal; the copy lives here as pure
+ * functions so it is behaviour-tested and identical at every call site.
+ */
+export function overwriteConfirmMessage(slotId: SaveSlotId): string {
+  return `${saveSlotLabel(slotId)} already holds a saved expedition. Starting a new adventure will overwrite it. Continue?`;
+}
+
+export function deleteSlotConfirmMessage(slotId: SaveSlotId): string {
+  return `Delete the saved expedition in ${saveSlotLabel(slotId)}? This removes both the local and cloud save and cannot be undone.`;
 }
 
 /**
@@ -194,6 +222,20 @@ export function bundleHardcore(bundle: SavedBundle): boolean {
   return bundle.hardcore === true;
 }
 
+// ------------------------------------------------------------- Phase 8 Tier 3
+
+/** The run seed a bundle generates its world from — pre-Tier-3 bundles
+ *  have none and stay on the unseeded legacy path. */
+export function bundleSeed(bundle: SavedBundle): string | undefined {
+  return normalizeRunSeed(bundle.runSeed);
+}
+
+/** The challenge list a bundle plays under — invalid entries dropped,
+ *  pre-Tier-3 bundles default to none. */
+export function bundleChallenges(bundle: SavedBundle): ChallengeId[] {
+  return normalizeChallenges(bundle.challenges);
+}
+
 /** Whether a bundle is a fallen hardcore run (death stamp present). */
 export function isBundleDead(bundle: SavedBundle): boolean {
   return typeof bundle.deadAtMs === 'number';
@@ -224,4 +266,74 @@ export function withDeathStamp(
 ): SavedBundle {
   if (isBundleDead(bundle)) return bundle;
   return { ...bundle, deadAtMs: nowMs, deathNote };
+}
+
+// ------------------------------------------- Audit fixes (Nov 14, post-P7)
+// Decision logic for the Phase 7 regressions found by the external audit,
+// extracted as pure functions so behaviour — not source text — is tested.
+
+/**
+ * Whether the pause menu may offer "Return to the Ending" (Phase 7).
+ *
+ * The button reopens the Ending Screen, whose Ascend action full-heals,
+ * keeps all gear, and clears any death stamp — so offering it anywhere
+ * once Malakor is dead hands a Hardcore player a sealed-death escape
+ * (pause mid-Abyss at 1 HP, ascend, never stamped). The offer is now
+ * restricted to sanctuary towns (`ZoneMap.isTown` — the zones where the
+ * game already guarantees no combat) in EVERY mode: the feature's real
+ * purpose is ascend-after-reload, and a reloaded completed run resumes
+ * in or can stroll to a town in normal play, while the Abyss is never
+ * a safe zone.
+ */
+export function canOfferReturnToEnding(state: {
+  malakorDefeated: boolean;
+  isTown: boolean;
+}): boolean {
+  return state.malakorDefeated && state.isTown;
+}
+
+export interface LoadedStateResolution {
+  /** The game state a loaded bundle should enter. */
+  gameState: GameState;
+  /** The HP the loaded player should start with. */
+  hp: number;
+}
+
+/**
+ * How a loaded bundle's hp resolves into a starting state (Phase 7 fix).
+ *
+ * A bundle can be saved on the death turn itself (hp <= 0, before the
+ * death flow resolved it). Phase 7 routed every such load to GAME_OVER,
+ * which for a NON-hardcore run locks the slot: the only exits wipe the
+ * run or abandon it, and the death is never recorded. Policy:
+ * - hp > 0: play on, HP untouched (both modes).
+ * - Hardcore, hp <= 0: GAME_OVER — death is final; the GAME_OVER effect
+ *   applies the death stamp, closing the tab-close race as well.
+ * - Non-hardcore, hp <= 0: PLAYING with HP clamped to 1 — the
+ *   pre-Phase-7 rescue (load, drink a draught, continue).
+ */
+export function resolveLoadedState(input: {
+  hp: number;
+  hardcore: boolean;
+}): LoadedStateResolution {
+  if (input.hp > 0) return { gameState: 'PLAYING', hp: input.hp };
+  if (input.hardcore) return { gameState: 'GAME_OVER', hp: input.hp };
+  return { gameState: 'PLAYING', hp: 1 };
+}
+
+/**
+ * Remove a bundle's completion stamp (the inverse of withCompletionStamp).
+ *
+ * Ascension into NG+ starts a fresh cycle, so the previous cycle's stamp
+ * must not ride along: the Title Screen's "✦ Completed" badge should
+ * describe the CURRENT cycle, and the completion-stamp effect (which
+ * fires only while no stamp exists) must be free to stamp the new
+ * cycle's own victory. Lifetime stats keep the record of past victories.
+ * Returns the bundle unchanged when it carries no stamp.
+ */
+export function clearCompletionStamp(bundle: SavedBundle): SavedBundle {
+  if (bundle.completedAtMs === undefined) return bundle;
+  const next = { ...bundle };
+  delete next.completedAtMs;
+  return next;
 }

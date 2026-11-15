@@ -461,7 +461,7 @@ export const NPCS: Record<string, NpcDef> = {
       },
       shadows_offer: {
         id: 'shadows_offer',
-        text: '"Good. Check the eastern chambers on Floor 1 for a Sealed Contraband Ledger. Bring it straight to me—and don’t let that hooded broker Vex talk you into turning traitor."',
+        text: '"Good. The smugglers have cached a Sealed Contraband Ledger somewhere on Floor 1 — their Smuggler Cache (▤) glows pink in the dark, so sweep the vaults and watch for it. Bring it straight to me—and don’t let that hooded broker Vex talk you into turning traitor."',
         choices: [
           {
             id: 'accept',

@@ -107,6 +107,11 @@ export const HallOfFameModal: React.FC<HallOfFameModalProps> = ({
                         <div className="text-[11px] font-mono-glyph text-slate-400 mt-0.5 tabular-nums">
                           {isWin ? 'Sovereign Vanquished' : 'Fallen Delver'} · Lv {entry.level} · Floor {entry.deepestDepth} · {entry.kills} Slain · {entry.turnsElapsed} Turns · {entry.gold}g
                         </div>
+                        {!isWin && entry.deathCause && (
+                          <div className="text-[11px] font-mono-glyph text-rose-300/90 mt-0.5">
+                            ☠ {entry.deathCause}
+                          </div>
+                        )}
                       </div>
                     </div>
                     <span className="text-[11px] font-mono-glyph text-slate-500 shrink-0">

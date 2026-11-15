@@ -132,6 +132,18 @@ export function applyLifetimeEvent(stats: LifetimeStats, event: LifetimeEvent): 
  * floors by their zone id, side dungeons by their fixed effective depths,
  * and the current zone's own depth as a floor.
  */
+/**
+ * Human-readable hardcore death note. A delver who dies before ever
+ * entering a dungeon has no floor to name — "Fell on Floor 0" read as a
+ * bug — so depth 0 is phrased as the surface, with the zone name alone
+ * carrying the location.
+ */
+export function formatDeathNote(deepestDepth: number, zoneName: string): string {
+  return deepestDepth > 0
+    ? `Fell on Floor ${deepestDepth} · ${zoneName}`
+    : `Fell on the surface · ${zoneName}`;
+}
+
 export function deepestDepthForZones(discoveredZones: readonly string[], currentDepth = 0): number {
   const sideZoneDepths: Record<string, number> = {
     barrow_1: 2,

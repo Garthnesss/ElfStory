@@ -5,7 +5,14 @@
 // advanced manually, and the whole sequence is skippable — the overlay
 // never blocks input to the canvas.
 
-export type TutorialStepId = 'move' | 'talk' | 'fight' | 'skills' | 'potion' | 'rest';
+export type TutorialStepId =
+  | 'move'
+  | 'talk'
+  | 'fight'
+  | 'companion'
+  | 'skills'
+  | 'potion'
+  | 'rest';
 
 export interface TutorialStep {
   id: TutorialStepId;
@@ -22,7 +29,7 @@ export const TUTORIAL_STEPS: readonly TutorialStep[] = [
   {
     id: 'talk',
     title: 'Talk to the town',
-    body: 'Bump into Warden Vance (the @ in Oakhaven) and take his quest. Every ◆ objective is pinned at the top of your screen; the full story lives in the Journal [J].',
+    body: 'Bump into Warden Vance, Oakhaven’s captain, and take his quest. Every ◆ objective is pinned at the top of your screen; the full story lives in the Journal [J].',
   },
   {
     id: 'fight',
@@ -30,9 +37,14 @@ export const TUTORIAL_STEPS: readonly TutorialStep[] = [
     body: 'Combat is bump-to-fight: step into a foe to strike it. Watch for red telegraph tiles and [!] wind-ups — step off them before the blow lands.',
   },
   {
+    id: 'companion',
+    title: 'A friend at your side',
+    body: 'The spirit companion at your heel — a silverwind lynx or starlight owl — fights beside you and deals real damage. It cannot permanently die: if it falls, it reforms after a short rest or when you return to town. Its button in the action dock cycles its stance: Aggressive, Guard, and Recall.',
+  },
+  {
     id: 'skills',
     title: 'Use your skills',
-    body: 'Your hotbar skills sit on keys 1–5, Inscription runes on 6–8. Open Skills [K] to spend the points you earn from levels, and check enemy intents with Look before you commit.',
+    body: 'Your hotbar skills sit on keys 1–5: press a number to arm a skill, then press the direction toward your foe to loose it — or click/tap a highlighted tile. Inscription runes sit on 6–8. Open Skills [K] to spend the points you earn from levels, and check enemy intents with Look before you commit.',
   },
   {
     id: 'potion',
@@ -52,6 +64,7 @@ export interface TutorialBaseline {
   y: number;
   kills: number;
   consumableCount: number;
+  companionStance: string;
 }
 
 export interface TutorialSignals {
@@ -59,6 +72,7 @@ export interface TutorialSignals {
   y: number;
   kills: number;
   consumableCount: number;
+  companionStance: string;
   dialogueOpen: boolean;
   anySkillOnCooldown: boolean;
   restedOrSaved: boolean;
@@ -78,6 +92,8 @@ export function isTutorialStepComplete(
       return signals.dialogueOpen;
     case 'fight':
       return signals.kills > baseline.kills;
+    case 'companion':
+      return signals.companionStance !== baseline.companionStance;
     case 'skills':
       return signals.anySkillOnCooldown;
     case 'potion':

@@ -612,6 +612,19 @@ export const AsciiCanvas: React.FC<AsciiCanvasProps> = ({
               ctx.drawImage(hazardCanvas, px, py);
             }
 
+            // Phase 8: dungeon descents get a glowing underlay so the exit
+            // reads at a glance — the bare plaque sprite blended into dark
+            // dungeon floors, while town stairs sit in full light. A soft
+            // amber pulse under the sprite plus the bright rim below give
+            // stairs_down the same lit presence everywhere.
+            if (tile.kind === 'stairs_down') {
+              const glow = reduceMotion
+                ? 0.2
+                : 0.17 + 0.06 * Math.sin(now * 0.004 + (x + y) * 0.7);
+              ctx.fillStyle = `rgba(245, 158, 11, ${glow.toFixed(3)})`;
+              ctx.fillRect(px + 1, py + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+            }
+
             const propSprite = getPropSprite(tile.kind, tile.used, animFrame, isDeep, propVariant);
             if (propSprite) {
               ctx.drawImage(propSprite, px + 2, py + 2, TILE_SIZE - 4, TILE_SIZE - 4);
@@ -620,6 +633,12 @@ export const AsciiCanvas: React.FC<AsciiCanvasProps> = ({
             if (tile.kind === 'vault_door') {
               ctx.strokeStyle = 'rgba(245, 158, 11, 0.48)';
               ctx.lineWidth = 1;
+              ctx.strokeRect(px + 1.5, py + 1.5, TILE_SIZE - 3, TILE_SIZE - 3);
+            }
+
+            if (tile.kind === 'stairs_down') {
+              ctx.strokeStyle = 'rgba(251, 191, 36, 0.8)';
+              ctx.lineWidth = 1.5;
               ctx.strokeRect(px + 1.5, py + 1.5, TILE_SIZE - 3, TILE_SIZE - 3);
             }
           }
@@ -1412,7 +1431,7 @@ export const AsciiCanvas: React.FC<AsciiCanvasProps> = ({
       {armedSkill && (
         <div className="absolute top-12 md:top-2.5 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 max-w-[94vw] px-3 py-1.5 rounded border border-amber-500/40 bg-[#0B0D12]/94 text-[11px] sm:text-xs font-medium text-amber-200 shadow-lg">
           <span className="truncate">
-            Targeting: {SKILLS[armedSkill].name} (Range {SKILLS[armedSkill].range})
+            Targeting: {SKILLS[armedSkill].name} (Range {SKILLS[armedSkill].range}) · Press a direction or tap a tile
           </span>
           {onCancelTargeting && (
             <button

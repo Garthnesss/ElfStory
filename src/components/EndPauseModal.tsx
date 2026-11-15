@@ -14,6 +14,14 @@ interface EndPauseModalProps {
   ngPlusCycle?: number;
   /** Phase 5: whether this run is hardcore (permadeath). */
   hardcore?: boolean;
+  /** Phase 8 Tier 3: the run's seed (pause menu display; copyable text). */
+  runSeed?: string;
+  /** Phase 8 Tier 3: active-challenges display line, when any. */
+  challengesLine?: string;
+  /** Phase 8 Tier 3 autopsy: the cause line (GAME_OVER only). */
+  deathCause?: string;
+  /** Phase 8 Tier 3 autopsy: the compact run recap row (GAME_OVER). */
+  recapLine?: string;
   authUser: User | null;
   cloudBusy: boolean;
   onSignIn: () => void;
@@ -45,6 +53,10 @@ export const EndPauseModal: React.FC<EndPauseModalProps> = ({
   difficultyLabel,
   ngPlusCycle = 0,
   hardcore = false,
+  runSeed,
+  challengesLine,
+  deathCause,
+  recapLine,
   authUser,
   cloudBusy,
   onSignIn,
@@ -106,6 +118,12 @@ export const EndPauseModal: React.FC<EndPauseModalProps> = ({
             {title}
           </h2>
           <p className="text-sm text-slate-300 mt-1.5 leading-relaxed">{subtitle}</p>
+          {mode === 'GAME_OVER' && deathCause && (
+            <p className="text-sm font-semibold text-rose-300 mt-2">{deathCause}</p>
+          )}
+          {mode === 'GAME_OVER' && recapLine && (
+            <p className="text-[11px] font-mono-glyph text-slate-400 mt-1 tabular-nums">{recapLine}</p>
+          )}
         </div>
 
         <div className="p-4 rounded border border-white/10 bg-[#141923] grid grid-cols-2 gap-3 text-xs font-mono-glyph">
@@ -141,6 +159,20 @@ export const EndPauseModal: React.FC<EndPauseModalProps> = ({
             <div>
               <div className="text-slate-400">Mode</div>
               <div className="text-rose-300 font-semibold mt-0.5">Hardcore — death is final</div>
+            </div>
+          )}
+          {challengesLine && (
+            <div className="col-span-2">
+              <div className="text-slate-400">Challenges</div>
+              <div className="text-purple-300 font-semibold mt-0.5">
+                {challengesLine.replace(/^Challenges: /, '')}
+              </div>
+            </div>
+          )}
+          {runSeed && (
+            <div className="col-span-2">
+              <div className="text-slate-400">Run Seed</div>
+              <div className="text-[#ECE4D4] font-semibold mt-0.5 select-all break-all">{runSeed}</div>
             </div>
           )}
         </div>

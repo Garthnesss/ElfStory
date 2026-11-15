@@ -97,9 +97,12 @@ function toObjective(q: QuestProgress, worldFlags: WorldFlags, isMain: boolean):
 /**
  * Derive the HUD tracker contents from quest state:
  * - main: the Sovereign of Cinder quest while active. If the run has not
- *   picked it up yet (no record at all) the tracker points at its giver so
- *   a fresh player always has a pinned objective; once completed (or
- *   Malakor is dead) it disappears.
+ *   picked it up yet (no record at all) the tracker walks the player down
+ *   the road to it: Vance first (he opens the descent), then — once his
+ *   Ledger quest is under way or done — onward toward the descent itself
+ *   and Kaelen's commission in Highspire, so the pinned objective never
+ *   keeps pointing at a conversation the player already had. Once the
+ *   main quest is completed (or Malakor is dead) it disappears.
  * - side: the earliest-defined active side quest (QUEST_DEFS order keeps
  *   this deterministic), with a count of any others.
  */
@@ -112,10 +115,17 @@ export function deriveTrackedObjectives(
   if (mainQuest && mainQuest.status === 'active') {
     main = toObjective(mainQuest, worldFlags, true);
   } else if (!mainQuest && !worldFlags.malakorDefeated) {
+    const ledger = quests['shadows_beneath'];
+    const hint =
+      ledger?.status === 'completed'
+        ? 'Take Guildmaster Kaelen’s commission in Highspire Citadel: descend to Floor 5 and defeat Malakor.'
+        : ledger?.status === 'active'
+          ? 'Descend to Floor 5 and defeat Malakor, Sovereign of Cinder — Vance’s Floor 1 ledger is your road to Highspire and the Guild’s commission.'
+          : 'Speak with Warden Vance in Oakhaven Outpost to take up the descent.';
     main = {
       questId: MAIN_QUEST_ID,
       title: QUEST_DEFS[MAIN_QUEST_ID]?.title ?? 'The Sovereign of Cinder',
-      hint: 'Speak with Warden Vance in Oakhaven Outpost to take up the descent.',
+      hint,
       isMain: true,
     };
   }

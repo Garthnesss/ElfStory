@@ -225,6 +225,14 @@ export interface Item {
   description: string;
   quantity?: number;
   questTag?: string;
+  /**
+   * Phase 8 Tier 2B: this weapon/armor has taken its one Masterwork temper
+   * step (the extra level beyond the normal temper cap). Once set, the
+   * item's temper cap is frozen at its current upgradeLevel — see
+   * temperCapFor in game/loot.ts. Optional: pre-Tier-2B saves hydrate
+   * unchanged.
+   */
+  masterwork?: boolean;
 }
 
 export type StatusKind =
@@ -238,7 +246,13 @@ export type StatusKind =
   | 'regen'
   | 'hasted'
   | 'cauterized'
-  | 'spine_guard';
+  | 'spine_guard'
+  // Phase 8 Tier 2B: shrine blessings ride the ordinary status plumbing
+  // (they tick down once per turn and feed computeDerivedStats). Exactly
+  // one blessing status may be active at a time — see game/blessings.ts.
+  | 'blessing_might'
+  | 'blessing_ward'
+  | 'blessing_vigor';
 
 export interface StatusEffect {
   kind: StatusKind;
@@ -268,11 +282,25 @@ export type EnemyArchetype =
 export type EnemyRank = 'normal' | 'elite' | 'rare' | 'randboss';
 
 export interface EnemyIntent {
-  type: 'strike' | 'heavy_windup' | 'hex_bolt' | 'ground_slam' | 'enemy_skill';
+  type:
+    | 'strike'
+    | 'heavy_windup'
+    | 'hex_bolt'
+    | 'ground_slam'
+    | 'enemy_skill'
+    // Phase 8 Tier 2A: behaviour intents, all routed through the same
+    // primed-intent machinery (snapshot tiles, stun deletes, Chill scales).
+    | 'summon'
+    | 'mend'
+    | 'lunge';
   label: string;
   damage: number;
   targetTiles: Array<{ x: number; y: number }>;
   skillId?: SkillId;
+  /** 'mend': the ally this heal is primed on (re-validated when it fires). */
+  targetEnemyId?: string;
+  /** 'mend': HP the heal restores when it fires (18 + 2*depth at prime time). */
+  healAmount?: number;
 }
 
 export interface Enemy {
@@ -298,6 +326,16 @@ export interface Enemy {
   runeCharge?: boolean;
   /** Phase 3: Grave Husk "Deathless" — set once its one free death-cheat is spent. */
   undyingUsed?: boolean;
+  /**
+   * Phase 8 Tier 2A: conjured by a Blight Weaver's summon intent. Summoned
+   * enemies grant NO XP, NO gold and NO loot — handleEnemyDeath honours
+   * this flag and skips the whole reward funnel (incl. bestiary credit).
+   */
+  summoned?: boolean;
+  /** Phase 8 Tier 2A: id of the weaver that summoned this enemy (cap counts). */
+  summonerId?: string;
+  /** Phase 8 Tier 2A: per-intent cooldowns (summon / mend), ticked per turn. */
+  intentCooldowns?: { summon?: number; mend?: number };
   statuses: StatusEffect[];
   intent?: EnemyIntent;
   alerted: boolean;
@@ -345,12 +383,23 @@ export interface CritterState {
   homeY: number;
 }
 
+/**
+ * Phase 8 Tier 2B: floor mutators — one may be attached to a generated
+ * dungeon floor (Abyss floors at 75%, any dungeon floor in NG+ cycle >= 1
+ * always; never on cycle-0 floors 1-5 or cycle-0 side dungeons). The
+ * multipliers live in game/mutators.ts; this is just the id stored on the
+ * zone. Optional so older saves hydrate unchanged (SAVE_VERSION stays 1).
+ */
+export type FloorMutatorId = 'gilded_depths' | 'horde' | 'umbral' | 'vital_surge';
+
 export interface ZoneMap {
   id: ZoneId;
   name: string;
   subtitle: string;
   isTown: boolean;
   depth: number;
+  /** Phase 8 Tier 2B: the mutator rolled for this floor, if any. */
+  mutator?: FloorMutatorId;
   width: number;
   height: number;
   tiles: Tile[][];
@@ -390,6 +439,12 @@ export interface PlayerState {
   inscriptionCooldowns?: number[];
   hasteSteps?: number;
   bonusHp?: number;
+  /**
+   * Phase 8 Tier 2B: shrine blessings bought so far THIS cycle — drives the
+   * escalating offering cost (150g, doubling). Reset to 0 on NG+ ascension;
+   * absent in older saves (treated as 0). See game/blessings.ts.
+   */
+  blessingPurchases?: number;
   statuses: StatusEffect[];
   equipped: Partial<Record<ItemSlot, Item>>;
   inventory: Item[];
@@ -581,4 +636,10 @@ export interface ChronicleEntry {
   gold: number;
   keyDecisions: string[];
   createdAtMs: number;
+  /**
+   * Phase 8 Tier 3: the run autopsy's cause line for fallen entries
+   * (built by buildDeathCause in game/autopsy.ts from the tracked last
+   * damage source). Absent on victories and on pre-Tier-3 entries.
+   */
+  deathCause?: string;
 }

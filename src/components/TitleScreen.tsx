@@ -1,10 +1,20 @@
 import React, { useState } from 'react';
 import { User } from 'firebase/auth';
 import { ScrollText, SlidersHorizontal, Trash2, Trophy } from 'lucide-react';
+import { CHALLENGE_DEFS, CHALLENGE_ORDER, ChallengeId } from '../game/challenges';
 import { CloudSaveSummary, SAVE_SLOTS } from '../game/cloudSave';
 import { DIFFICULTY_INFO, DIFFICULTY_ORDER, DifficultyTier } from '../game/difficulty';
+import { LifetimeStats } from '../game/lifetime';
 import { SlotIssue } from '../game/saveSlots';
-import { PlayerState, SaveSlotId } from '../game/types';
+import {
+  canChooseCompanion,
+  canUseVeteransCache,
+  companionChoiceHint,
+  defaultCompanionKindForClass,
+  NewGameUnlockChoices,
+  veteransCacheHint,
+} from '../game/unlocks';
+import { CompanionKind, PlayerState, SaveSlotId } from '../game/types';
 import titleBackdrop from '../assets/images/title_crypt_backdrop_1794536484639.jpg';
 
 export interface LocalSlotSummary {
@@ -49,8 +59,16 @@ interface TitleScreenProps {
     starterClass: PlayerState['starterClass'],
     slotId: SaveSlotId,
     difficulty: DifficultyTier,
-    hardcore: boolean
+    hardcore: boolean,
+    tier3Choices?: {
+      seedInput?: string;
+      challenges?: ChallengeId[];
+      unlockChoices?: NewGameUnlockChoices;
+    }
   ) => void;
+  /** Phase 8 Tier 3: per-device lifetime record — gates the companion
+   *  choice and Veteran's Cache unlocks (predicates in game/unlocks.ts). */
+  lifetime: LifetimeStats;
   onContinueLocal: (slotId: SaveSlotId) => void;
   onContinueCloud: (slotId: SaveSlotId) => void;
   onDeleteSlot: (slotId: SaveSlotId) => void;
@@ -123,6 +141,7 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
   onSignIn,
   onSignOut,
   onStartNew,
+  lifetime,
   onContinueLocal,
   onContinueCloud,
   onDeleteSlot,
@@ -136,6 +155,20 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
   const [selectedDifficulty, setSelectedDifficulty] = useState<DifficultyTier>('standard');
   const [hardcore, setHardcore] = useState(false);
   const [imgError, setImgError] = useState(false);
+  // Phase 8 Tier 3: run seed (blank = a fresh random seed), challenge
+  // toggles, and the two lifetime-unlock choices.
+  const [seedInput, setSeedInput] = useState('');
+  const [selectedChallenges, setSelectedChallenges] = useState<ChallengeId[]>([]);
+  const [companionChoice, setCompanionChoice] = useState<CompanionKind | null>(null);
+  const [veteransCache, setVeteransCache] = useState(false);
+  const companionUnlocked = canChooseCompanion(lifetime);
+  const cacheUnlocked = canUseVeteransCache(lifetime);
+
+  const toggleChallenge = (id: ChallengeId) => {
+    setSelectedChallenges((prev) =>
+      prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id]
+    );
+  };
 
   const selectedCloud = cloudSlots[activeSlot];
   const selectedLocal = localSlots[activeSlot];
@@ -372,13 +405,151 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
               </button>
             </div>
 
+            {/* Challenge Modifiers (Phase 8 Tier 3) — stackable, creation-only */}
+            <div className="space-y-2">
+              <div className="text-xs font-medium text-amber-200/80">
+                Challenges <span className="text-slate-400 font-normal">(optional, stackable)</span>
+              </div>
+              <div className="flex flex-wrap gap-2 max-w-lg">
+                {CHALLENGE_ORDER.map((id) => {
+                  const active = selectedChallenges.includes(id);
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => toggleChallenge(id)}
+                      aria-pressed={active}
+                      title={CHALLENGE_DEFS[id].blurb}
+                      className={`min-h-[44px] px-3 py-2 rounded border text-xs font-semibold transition-colors cursor-pointer ${
+                        active
+                          ? 'border-purple-400/70 bg-purple-500/15 text-[#FDF6E3]'
+                          : 'border-white/10 bg-[#11151E]/80 text-slate-300 hover:border-white/25'
+                      }`}
+                    >
+                      {CHALLENGE_DEFS[id].name}
+                    </button>
+                  );
+                })}
+              </div>
+              {selectedChallenges.length > 0 && (
+                <div className="max-w-lg text-[11px] text-slate-400 leading-snug">
+                  {selectedChallenges.map((id) => CHALLENGE_DEFS[id].blurb).join(' ')}
+                </div>
+              )}
+            </div>
+
+            {/* Run Seed (Phase 8 Tier 3) — the seed shapes the dungeons only */}
+            <div className="space-y-1.5 max-w-lg">
+              <label htmlFor="elfstory-seed" className="block text-xs font-medium text-amber-200/80">
+                Run Seed <span className="text-slate-400 font-normal">(optional)</span>
+              </label>
+              <input
+                id="elfstory-seed"
+                type="text"
+                value={seedInput}
+                onChange={(e) => setSeedInput(e.target.value)}
+                placeholder="Leave blank for a random seed"
+                autoComplete="off"
+                spellCheck={false}
+                className="w-full min-h-[44px] px-3 py-2 rounded border border-white/10 bg-[#11151E]/80 text-sm text-[#ECE4D4] placeholder:text-slate-500 focus:border-amber-400/60 focus:outline-none font-mono-glyph"
+              />
+              <div className="text-[11px] text-slate-400 leading-snug">
+                The same seed rebuilds the same dungeons — share it to race a friend’s descent.
+                Combat dice stay unseeded.
+              </div>
+            </div>
+
+            {/* Lifetime Unlocks (Phase 8 Tier 3) — options, never power */}
+            <div className="space-y-2 max-w-lg">
+              {companionUnlocked ? (
+                <div className="space-y-1.5">
+                  <div className="text-xs font-medium text-amber-200/80">Spirit Companion</div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(
+                      [
+                        { kind: null, label: 'Class Default' },
+                        { kind: 'silverwind_lynx' as CompanionKind, label: '🦊 Lynx' },
+                        { kind: 'starlight_owl' as CompanionKind, label: '🦉 Owl' },
+                      ] as const
+                    ).map((opt) => {
+                      const active = companionChoice === opt.kind;
+                      return (
+                        <button
+                          key={opt.label}
+                          type="button"
+                          onClick={() => setCompanionChoice(opt.kind)}
+                          aria-pressed={active}
+                          className={`min-h-[44px] px-2 py-2 rounded border text-xs font-semibold transition-colors cursor-pointer ${
+                            active
+                              ? 'border-amber-400/70 bg-amber-500/12 text-[#FDF6E3]'
+                              : 'border-white/10 bg-[#11151E]/80 text-slate-300 hover:border-white/25'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="text-[11px] text-slate-400 leading-snug">
+                    {companionChoice === null
+                      ? `${selectedClass} bonds the ${defaultCompanionKindForClass(selectedClass) === 'starlight_owl' ? 'Starlight Owl' : 'Silverwind Lynx'} by default.`
+                      : companionChoiceHint(lifetime)}
+                  </div>
+                </div>
+              ) : (
+                <div className="text-[11px] text-slate-500 leading-snug">
+                  🔒 Companion choice — {companionChoiceHint(lifetime)}
+                </div>
+              )}
+
+              {cacheUnlocked ? (
+                <button
+                  type="button"
+                  onClick={() => setVeteransCache((v) => !v)}
+                  aria-pressed={veteransCache}
+                  className={`min-h-[44px] w-full px-3.5 py-2.5 rounded border text-left transition-colors cursor-pointer ${
+                    veteransCache
+                      ? 'border-amber-400/70 bg-amber-500/12 text-[#FDF6E3]'
+                      : 'border-white/10 bg-[#11151E]/80 text-slate-300 hover:border-white/25'
+                  }`}
+                >
+                  <span className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-semibold">Veteran’s Cache</span>
+                    <span
+                      className={`text-[11px] font-mono-glyph font-bold ${
+                        veteransCache ? 'text-amber-300' : 'text-slate-500'
+                      }`}
+                    >
+                      {veteransCache ? 'ON' : 'OFF'}
+                    </span>
+                  </span>
+                  <span className="block text-[11px] text-slate-400 mt-0.5 leading-snug">
+                    Begin the run with one extra random inscription, drawn from the road behind you.
+                  </span>
+                </button>
+              ) : (
+                <div className="text-[11px] text-slate-500 leading-snug">
+                  🔒 Veteran’s Cache — {veteransCacheHint(lifetime)}
+                </div>
+              )}
+            </div>
+
             {authError && <div className="text-xs text-rose-300">{authError}</div>}
 
             {/* Primary CTAs */}
             <div className="flex flex-wrap items-center gap-3 pt-1">
               <button
                 type="button"
-                onClick={() => onStartNew(selectedClass, activeSlot, selectedDifficulty, hardcore)}
+                onClick={() =>
+                  onStartNew(selectedClass, activeSlot, selectedDifficulty, hardcore, {
+                    seedInput,
+                    challenges: selectedChallenges,
+                    unlockChoices: {
+                      companionKind: companionUnlocked ? companionChoice : null,
+                      veteransCache: cacheUnlocked ? veteransCache : false,
+                    },
+                  })
+                }
                 className="min-h-[44px] px-6 py-2.5 rounded bg-amber-500 hover:bg-amber-400 text-[#0B0D12] font-semibold text-sm transition-colors cursor-pointer whitespace-nowrap shrink-0"
               >
                 {selectedLocal || selectedCloud

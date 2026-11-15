@@ -12,6 +12,11 @@ import { KEY_ACTIONS, mergeKeymap } from '../src/game/settings';
 //     instead of a frozen, unrecoverable scene;
 //  3. the complete_quest handler refuses to pay a completion twice;
 //  4. selling a stacked consumable sells one unit, not the whole stack.
+//
+// Post-Phase-7 audit (Nov 14): pins 1 and 2 now point at the extracted
+// pure functions (canOfferReturnToEnding / resolveLoadedState in
+// game/saveSlots.ts) — the town-only gate and the Hardcore-only
+// GAME_OVER routing are behaviour-tested in tests/audit-fixes.test.ts.
 
 const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
 const pauseModal = readFileSync(
@@ -23,8 +28,12 @@ test('Phase 7 ascend: pause menu can return to the Ending Screen for a completed
   assert.ok(pauseModal.includes('canReturnToEnding'), 'modal accepts the return-to-ending gate');
   assert.ok(pauseModal.includes('Return to the Ending'), 'modal renders the button');
   assert.ok(
-    app.includes('canReturnToEnding={Boolean(worldFlags.malakorDefeated)}'),
-    'gate is the current run\u2019s malakorDefeated flag (not the carried-over stamp)'
+    app.includes('canReturnToEnding={canOfferReturnToEnding({'),
+    'the offer goes through the pure town+victory gate (post-P7 audit fix)'
+  );
+  assert.ok(
+    app.includes('malakorDefeated: Boolean(worldFlags.malakorDefeated)'),
+    'gate reads the current run\u2019s malakorDefeated flag (not the carried-over stamp)'
   );
   assert.ok(
     app.includes("onReturnToEnding={() => setGameState('VICTORY')}"),
@@ -32,10 +41,14 @@ test('Phase 7 ascend: pause menu can return to the Ending Screen for a completed
   );
 });
 
-test('Phase 7 saves: an hp <= 0 bundle loads into GAME_OVER, never a frozen run', () => {
+test('Phase 7 saves: an hp <= 0 bundle resolves by mode, never a frozen run', () => {
   assert.ok(
-    app.includes("setGameState(normalizedPlayer.hp <= 0 ? 'GAME_OVER' : 'PLAYING')"),
-    'applySavedBundle routes death-turn saves to the death flow'
+    app.includes('resolveLoadedState({'),
+    'applySavedBundle resolves death-turn saves through the pure policy'
+  );
+  assert.ok(
+    app.includes('setGameState(loadedState.gameState)'),
+    'the resolved state (GAME_OVER for Hardcore, 1 HP rescue otherwise) is applied'
   );
 });
 

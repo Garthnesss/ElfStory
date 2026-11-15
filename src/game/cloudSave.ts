@@ -111,6 +111,10 @@ export interface CloudSavePayload {
   deadAtMs?: number;
   /** Phase 5: short death note recorded with deadAtMs. */
   deathNote?: string;
+  /** Phase 8 Tier 3: run seed governing floor generation (absent => legacy). */
+  runSeed?: string;
+  /** Phase 8 Tier 3: challenge modifier ids for the run (absent => none). */
+  challenges?: string[];
 }
 
 export interface CloudSaveSummary {
@@ -303,6 +307,62 @@ export function unpackZones(rawZones: Record<string, Record<string, unknown>>): 
   return out as Record<ZoneId, ZoneMap>;
 }
 
+/** First Endless Abyss depth: dungeon_1..5 are the story descent. */
+const ABYSS_FIRST_DEPTH = 6;
+
+/** The Abyss depth of a zone id, or null for story/non-dungeon zones. */
+function abyssDepthOf(zoneId: string): number | null {
+  if (!zoneId.startsWith('dungeon_')) return null;
+  const n = Number(zoneId.slice('dungeon_'.length));
+  return Number.isInteger(n) && n >= ABYSS_FIRST_DEPTH ? n : null;
+}
+
+/**
+ * Drop stale Endless Abyss floors from a zone set before persisting
+ * (audit fix, Nov 14). Every Abyss floor is stored as its own dungeon_N
+ * zone (~12 KB packed), so an unpinned delve grows the save without
+ * limit and crosses the cloud ceiling (MAX_CLOUD_SAVE_BYTES) around
+ * floor 65. Pruned floors regenerate via generateDungeonFloor when the
+ * player climbs back to them, so the keep set is small: the current
+ * floor and the one immediately below it, plus the deepest floor
+ * reached and the one below that (the frontier — still the re-entry
+ * point when the save happens in town). Story floors 1–5 and every
+ * non-dungeon zone are never pruned. "Deepest floor" stats read from
+ * worldFlags.discoveredZones (deepestDepthForZones), not from this zone
+ * set, so pruning never shrinks them. Returns the input unchanged (same
+ * reference) when there is nothing to drop.
+ */
+export function pruneAbyssZones(
+  zones: Record<ZoneId, ZoneMap>,
+  currentZoneId: ZoneId
+): Record<ZoneId, ZoneMap> {
+  const present: number[] = [];
+  for (const id of Object.keys(zones)) {
+    const d = abyssDepthOf(id);
+    if (d !== null) present.push(d);
+  }
+  if (present.length === 0) return zones;
+  const keep = new Set<number>();
+  const anchor = (depth: number) => {
+    keep.add(depth);
+    if (depth - 1 >= ABYSS_FIRST_DEPTH) keep.add(depth - 1);
+  };
+  const current = abyssDepthOf(currentZoneId);
+  if (current !== null) anchor(current);
+  anchor(Math.max(...present));
+  let dropped = false;
+  const out: Record<string, ZoneMap> = {};
+  for (const [id, z] of Object.entries(zones)) {
+    const d = abyssDepthOf(id);
+    if (d !== null && !keep.has(d)) {
+      dropped = true;
+      continue;
+    }
+    out[id] = z;
+  }
+  return dropped ? (out as Record<ZoneId, ZoneMap>) : zones;
+}
+
 // Clamp strings & integers to guarantee adherence to firebase-blueprint.json limits
 function sanitizeForBlueprint(
   uid: string,
@@ -326,7 +386,9 @@ function sanitizeForBlueprint(
     gold: safeGold,
     savePayload: stripUndefined({
       player: payload.player,
-      zones: packZones(payload.zones),
+      // Prune stale Abyss floors here as well as in the App's save path,
+      // so every cloud write — including direct ones — stays bounded.
+      zones: packZones(pruneAbyssZones(payload.zones, payload.currentZoneId)),
       currentZoneId: payload.currentZoneId,
       worldFlags: payload.worldFlags,
       quests: payload.quests,
@@ -342,6 +404,13 @@ function sanitizeForBlueprint(
       hardcore: payload.hardcore,
       deadAtMs: payload.deadAtMs,
       deathNote: payload.deathNote,
+      // Phase 8 Tier 3 fields ride along the same way (the seed is
+      // clamped to the same 48 chars normalizeRunSeed enforces).
+      runSeed:
+        typeof payload.runSeed === 'string' ? payload.runSeed.slice(0, 48) : undefined,
+      challenges: Array.isArray(payload.challenges)
+        ? payload.challenges.filter((c): c is string => typeof c === 'string').slice(0, 8)
+        : undefined,
     }),
   };
 }
@@ -523,6 +592,9 @@ export async function recordChronicleToCloud(
       turnsElapsed: Math.max(0, Math.floor(entry.turnsElapsed)),
       gold: Math.max(0, Math.floor(entry.gold)),
       keyDecisions: safeDecisions,
+      // Phase 8 Tier 3: the autopsy cause line rides along for fallen
+      // entries (stripUndefined-style: omitted when absent).
+      ...(entry.deathCause ? { deathCause: entry.deathCause.slice(0, 160) } : {}),
       createdAt: serverTimestamp(),
     });
   } catch (error) {
@@ -554,6 +626,7 @@ export async function loadChroniclesFromCloud(uid: string): Promise<ChronicleEnt
         turnsElapsed: Number(data.turnsElapsed ?? 0),
         gold: Number(data.gold ?? 0),
         keyDecisions: Array.isArray(data.keyDecisions) ? data.keyDecisions : [],
+        deathCause: typeof data.deathCause === 'string' ? data.deathCause : undefined,
         createdAtMs: createdAt?.toMillis ? createdAt.toMillis() : Date.now(),
       });
     });

@@ -11,6 +11,30 @@ import {
   RelicSetId,
   RuneEnchantId,
 } from './types';
+import { generationRandom } from './rng';
+
+// Phase 8 Tier 3: the rarity roll and the item/inscription generators
+// draw through generationRandom() so that, while generateDungeonFloor
+// has a seeded floor rng installed (game/rng.ts), loot rolled AT
+// GENERATION is reproducible from the run seed. Outside generation the
+// helper is exactly Math.random, so kill-time drops and chest-open rolls
+// are unchanged. createRandomSetRelic and rerollEquipmentAffix are never
+// called during floor generation and deliberately keep raw Math.random.
+
+/**
+ * Phase 8: chest loot used to land in the Pack silently — players finished
+ * floors wearing starter gear while upgrades sat unopened. When a chest
+ * grants anything equippable (gear or an inscription), the caller follows
+ * its loot line with this nudge. Consumable/quest/gold-only hauls never
+ * trigger it.
+ */
+export const LOOT_COMPARE_PROMPT = 'New gear in your Pack — press [I] to compare and equip.';
+
+export function hasEquippableLoot(
+  items: ReadonlyArray<Pick<Item, 'category'>>
+): boolean {
+  return items.some((i) => i.category === 'equipment' || i.category === 'inscription');
+}
 
 export const RUNE_ENCHANTS: Record<
   RuneEnchantId,
@@ -165,9 +189,30 @@ const AFFIX_POOL: Array<{ id: ItemAffixId; label: string }> = [
   { id: 'arcane_ward', label: 'Passive: Start floor with Shielded (+4 DEF, 4t)' },
 ];
 
-function rollRarity(depth: number, forceMinRarity?: ItemRarity): ItemRarity {
+/**
+ * Phase 8 Tier 2B: the rarity roll's depth bonus. The old curve was a flat
+ * 9 per depth with no ceiling, so the roll (d100 + bonus vs. thresholds
+ * 42/72/96/118) saturated: by depth ~14 the minimum roll already cleared
+ * the Relic threshold and EVERY drop was top-tier, flattening the Abyss
+ * loot chase exactly where the endless mode needs it.
+ *
+ * New curve: IDENTICAL to the old one through depth 5 (9 * depth — the
+ * main game is untouched), then +3 per additional depth, capped at +80
+ * total. Resulting rarity mixes (uniform d100):
+ *   depth 5  (bonus 45): Uncommon 27% · Rare 24% · Epic 22% · Relic 27%
+ *   depth 14 (bonus 72): Rare 24% · Epic 22% · Relic 54% — often top-tier,
+ *     never guaranteed, and nothing below Rare.
+ *   depth 30 (bonus 80, capped): Rare 16% · Epic 22% · Relic 62% — Relic
+ *     stays frequent forever but can never become a certainty.
+ */
+export function depthRarityBonus(depth: number): number {
+  if (depth <= 5) return depth * 9;
+  return Math.min(45 + (depth - 5) * 3, 80);
+}
+
+function rollRarity(depth: number, forceMinRarity?: ItemRarity, extraBonus = 0): ItemRarity {
   const order: ItemRarity[] = ['Common', 'Uncommon', 'Rare', 'Epic', 'Relic'];
-  const roll = Math.random() * 100 + depth * 9;
+  const roll = generationRandom() * 100 + depthRarityBonus(depth) + extraBonus;
   let picked: ItemRarity = 'Common';
   if (roll > 118) picked = 'Relic';
   else if (roll > 96) picked = 'Epic';
@@ -183,16 +228,16 @@ function rollRarity(depth: number, forceMinRarity?: ItemRarity): ItemRarity {
 
 export function generateProceduralItem(
   depth: number,
-  options?: { slot?: ItemSlot; minRarity?: ItemRarity }
+  options?: { slot?: ItemSlot; minRarity?: ItemRarity; lootBonus?: number }
 ): Item {
   const slots: ItemSlot[] = ['weapon', 'armor', 'helm', 'ring', 'amulet'];
-  const slot = options?.slot ?? slots[Math.floor(Math.random() * slots.length)];
-  const rarity = rollRarity(depth, options?.minRarity);
+  const slot = options?.slot ?? slots[Math.floor(generationRandom() * slots.length)];
+  const rarity = rollRarity(depth, options?.minRarity, options?.lootBonus ?? 0);
   const rarityScale =
     rarity === 'Common' ? 1 : rarity === 'Uncommon' ? 1.35 : rarity === 'Rare' ? 1.75 : rarity === 'Epic' ? 2.2 : 2.7;
 
   const baseList = SLOT_BASES[slot];
-  const base = baseList[Math.floor(Math.random() * baseList.length)];
+  const base = baseList[Math.floor(generationRandom() * baseList.length)];
   const power = Math.max(1, Math.round((1.8 + depth * 1.1) * rarityScale));
 
   const stats: ItemStats = {};
@@ -215,13 +260,13 @@ export function generateProceduralItem(
 
   let name = base.name;
   if (rarity !== 'Common') {
-    const prefix = PREFIXES[Math.floor(Math.random() * PREFIXES.length)];
+    const prefix = PREFIXES[Math.floor(generationRandom() * PREFIXES.length)];
     name = `${prefix.name} ${name}`;
     addStat(prefix.stat, Math.max(1, Math.round(power * 0.65 * prefix.mult)));
   }
 
   if (rarity === 'Rare' || rarity === 'Epic' || rarity === 'Relic') {
-    const suffix = SUFFIXES[Math.floor(Math.random() * SUFFIXES.length)];
+    const suffix = SUFFIXES[Math.floor(generationRandom() * SUFFIXES.length)];
     name = `${name} ${suffix.name}`;
     addStat(suffix.stat, Math.max(1, Math.round(power * 0.6 * suffix.mult)));
   }
@@ -229,7 +274,7 @@ export function generateProceduralItem(
   let affix: ItemAffixId | undefined;
   let affixLabel: string | undefined;
   if (rarity === 'Rare' || rarity === 'Epic' || rarity === 'Relic') {
-    const pickedAffix = AFFIX_POOL[Math.floor(Math.random() * AFFIX_POOL.length)];
+    const pickedAffix = AFFIX_POOL[Math.floor(generationRandom() * AFFIX_POOL.length)];
     affix = pickedAffix.id;
     affixLabel = pickedAffix.label;
   }
@@ -429,12 +474,12 @@ export const INSCRIPTION_META: Record<InscriptionKind, InscriptionMeta> = {
 
 export function generateInscription(
   depth: number,
-  options?: { kind?: InscriptionKind; minRarity?: ItemRarity }
+  options?: { kind?: InscriptionKind; minRarity?: ItemRarity; lootBonus?: number }
 ): Item {
   const kinds = Object.keys(INSCRIPTION_META) as InscriptionKind[];
-  const kind = options?.kind ?? kinds[Math.floor(Math.random() * kinds.length)];
+  const kind = options?.kind ?? kinds[Math.floor(generationRandom() * kinds.length)];
   const meta = INSCRIPTION_META[kind];
-  const rarity = rollRarity(depth, options?.minRarity ?? 'Uncommon');
+  const rarity = rollRarity(depth, options?.minRarity ?? 'Uncommon', options?.lootBonus ?? 0);
   const rarityScale =
     rarity === 'Common' ? 0.9 : rarity === 'Uncommon' ? 1.0 : rarity === 'Rare' ? 1.3 : rarity === 'Epic' ? 1.6 : 1.9;
   const cdReduction = rarity === 'Relic' ? 3 : rarity === 'Epic' ? 2 : rarity === 'Rare' ? 1 : 0;
@@ -974,6 +1019,71 @@ export function upgradeEquipmentItem(item: Item): Item {
     stats: updatedStats,
     value: Math.round(item.value * 1.3),
   };
+}
+
+/**
+ * Phase 8 Tier 2B: affix reroll pricing scales with the item's rarity
+ * (previously a flat 25g for everything, which made reforging a Relic as
+ * cheap as reforging a Rare). Gold climbs the rarity ladder; dust stays a
+ * flat 8 — dust income is already the tighter currency early, and the sink
+ * this change needs to create is a gold sink. (The design ladder listed
+ * six steps — Common/Magic/Rare/Epic/Legendary/Relic; this game's rarity
+ * ladder has five, so 'Magic' maps to Uncommon and Relic takes the top
+ * step at 180g.) The smithy discount in App/MerchantModal applies on top,
+ * exactly as it did to the old flat price.
+ */
+export const REROLL_GOLD_BY_RARITY: Record<ItemRarity, number> = {
+  Common: 25,
+  Uncommon: 40,
+  Rare: 65,
+  Epic: 100,
+  Relic: 180,
+};
+
+export const REROLL_DUST_COST = 8;
+
+export function rerollAffixCost(rarity: ItemRarity): { gold: number; dust: number } {
+  return { gold: REROLL_GOLD_BY_RARITY[rarity], dust: REROLL_DUST_COST };
+}
+
+/** The normal temper cap: +3, or +4 once the town Smithy reaches level 2. */
+export function temperBaseCap(smithyLevel: number): number {
+  return smithyLevel >= 2 ? 4 : 3;
+}
+
+/**
+ * The temper cap for a specific item. A Masterwork item (see below) is
+ * finished work: its cap is frozen at the upgradeLevel it was masterworked
+ * to, so a later Smithy upgrade can never reopen cheap tempers on it.
+ * Every other item caps at the smithy base cap.
+ */
+export function temperCapFor(item: Item, smithyLevel: number): number {
+  if (item.masterwork) return item.upgradeLevel;
+  return temperBaseCap(smithyLevel);
+}
+
+/** Phase 8 Tier 2B: the Masterwork temper step — one level beyond the cap. */
+export const MASTERWORK_TEMPER_COST = { gold: 250, dust: 40 };
+
+/**
+ * Whether an item may take its Masterwork step: a weapon or armor sitting
+ * AT the normal temper cap that has not already been masterworked. The
+ * step itself flows through the ordinary temper math (upgradeEquipmentItem)
+ * and is charged at MASTERWORK_TEMPER_COST with no smithy discount — it is
+ * priced as an endgame gold sink, not a routine forge service.
+ */
+export function canMasterworkTemper(item: Item, smithyLevel: number): boolean {
+  return (
+    item.category === 'equipment' &&
+    (item.slot === 'weapon' || item.slot === 'armor') &&
+    !item.masterwork &&
+    item.upgradeLevel >= temperBaseCap(smithyLevel)
+  );
+}
+
+/** Apply the Masterwork temper step: one ordinary temper level, flagged. */
+export function applyMasterworkTemper(item: Item): Item {
+  return { ...upgradeEquipmentItem(item), masterwork: true };
 }
 
 export function enchantEquipmentItem(item: Item, enchantId: RuneEnchantId): Item {

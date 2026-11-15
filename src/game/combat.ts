@@ -1,6 +1,15 @@
 import { computeBestiaryPerks } from './codex';
 import { computeDerivedStats, SKILLS } from './skills';
-import { Enemy, EnemyIntent, PlayerState, StatusKind, Tile, WorldFlags, ZoneMap } from './types';
+import {
+  Enemy,
+  EnemyArchetype,
+  EnemyIntent,
+  PlayerState,
+  StatusKind,
+  Tile,
+  WorldFlags,
+  ZoneMap,
+} from './types';
 
 export function computeVisibility(zone: ZoneMap, px: number, py: number, radius = 8): void {
   if (zone.isTown) {
@@ -82,6 +91,313 @@ export function hasAffix(player: PlayerState, affix: string): boolean {
   return Object.values(player.equipped).some((item) => item?.affix === affix);
 }
 
+// ---------------------------------------------------------------------------
+// Phase 8 Tier 2A: enemy behaviour brains.
+//
+// Until now every archetype shared one movement brain (BFS one step toward
+// the player, always closing) and three telegraph families. These pure
+// functions add four behaviours — caster kiting, summoning, mending and a
+// charger lunge — all routed through the existing primed-intent machinery:
+// intents snapshot their target tiles when primed and fire next turn, a
+// Bastion Bash stun deletes a primed intent, and Chill scales intent damage.
+// No parallel systems, no stat changes.
+// ---------------------------------------------------------------------------
+
+/** Non-boss hex casters keep a preferred range band instead of closing in. */
+export const CASTER_BAND_MIN = 2;
+export const CASTER_BAND_MAX = 4;
+export const KITING_CASTER_ARCHETYPES: ReadonlySet<EnemyArchetype> = new Set([
+  'bone_acolyte',
+  'ash_cultist',
+  'blight_weaver',
+  'rime_revenant',
+]);
+
+/** Blight Weaver summon: cooldown, living-summons cap, trigger range, roll. */
+export const SUMMON_COOLDOWN_TURNS = 12;
+export const SUMMON_CAP = 2;
+export const SUMMON_RANGE = 6;
+export const SUMMON_ROLL = 0.6;
+
+/** Ash Cultist mend: cooldown, prime range, fire range, HP threshold, roll. */
+export const MEND_COOLDOWN_TURNS = 8;
+export const MEND_RANGE = 4;
+export const MEND_FIRE_RANGE = 5;
+export const MEND_WOUNDED_THRESHOLD = 0.6;
+export const MEND_ROLL = 0.75;
+
+/** Shadow Stalker lunge roll when a clear 2–3 tile line exists. */
+export const LUNGE_ROLL = 0.35;
+
+/** Heal a fired mend restores: 18 + 2 per dungeon depth. */
+export function mendHealAmount(depth: number): number {
+  return 18 + 2 * depth;
+}
+
+export function isKitingCaster(enemy: Enemy): boolean {
+  return KITING_CASTER_ARCHETYPES.has(enemy.archetype) && !enemy.isBoss;
+}
+
+// Same direction order as findPathNextStep so step choice is deterministic.
+const STEP_DIRS = [
+  { dx: 0, dy: -1 },
+  { dx: 1, dy: 0 },
+  { dx: 0, dy: 1 },
+  { dx: -1, dy: 0 },
+  { dx: 1, dy: -1 },
+  { dx: 1, dy: 1 },
+  { dx: -1, dy: 1 },
+  { dx: -1, dy: -1 },
+];
+
+/**
+ * Legal single steps from (x, y): walkable, no diagonal corner-cutting
+ * (same rule as findPathNextStep), and `isFree` — supplied by the caller to
+ * express occupancy (enemies / NPCs / player / companion).
+ */
+export function legalStepTiles(
+  zone: ZoneMap,
+  x: number,
+  y: number,
+  isFree: (x: number, y: number) => boolean
+): Array<{ x: number; y: number }> {
+  const out: Array<{ x: number; y: number }> = [];
+  for (const d of STEP_DIRS) {
+    const nx = x + d.dx;
+    const ny = y + d.dy;
+    if (!zone.tiles[ny]?.[nx]?.walkable) continue;
+    if (d.dx !== 0 && d.dy !== 0) {
+      if (!zone.tiles[y]?.[nx]?.walkable || !zone.tiles[ny]?.[x]?.walkable) continue;
+    }
+    if (!isFree(nx, ny)) continue;
+    out.push({ x: nx, y: ny });
+  }
+  return out;
+}
+
+export type CasterMovePlan =
+  | { kind: 'step'; x: number; y: number }
+  | { kind: 'hold' }
+  | { kind: 'approach' };
+
+/**
+ * Kiting-caster movement brain. Preferred band is CASTER_BAND_MIN..MAX
+ * (Chebyshev) from the player:
+ * - beyond the band: 'approach' (caller uses the normal pathing step);
+ * - inside the band: 'hold' — the caster stands and casts;
+ * - closer than the band: 'step' to the legal tile that most increases the
+ *   distance, or 'hold' when cornered (no step improves the distance — the
+ *   caller then falls back to its normal adjacent behaviour, e.g. a bump).
+ * One step per turn, so a player who keeps closing always corners it.
+ */
+export function planCasterMove(
+  zone: ZoneMap,
+  enemy: Enemy,
+  player: PlayerState,
+  isFree: (x: number, y: number) => boolean
+): CasterMovePlan {
+  const dist = chebyshev(enemy.x, enemy.y, player.x, player.y);
+  if (dist > CASTER_BAND_MAX) return { kind: 'approach' };
+  if (dist >= CASTER_BAND_MIN) return { kind: 'hold' };
+  let best: { x: number; y: number } | null = null;
+  let bestDist = dist;
+  for (const step of legalStepTiles(zone, enemy.x, enemy.y, isFree)) {
+    const d = chebyshev(step.x, step.y, player.x, player.y);
+    if (d > bestDist) {
+      bestDist = d;
+      best = step;
+    }
+  }
+  return best ? { kind: 'step', x: best.x, y: best.y } : { kind: 'hold' };
+}
+
+export function countLivingSummons(zone: ZoneMap, summonerId: string): number {
+  return zone.enemies.filter((e) => e.summoned && e.summonerId === summonerId && e.hp > 0).length;
+}
+
+/** First free tile adjacent to the weaver a summon could manifest on. */
+export function findSummonTile(
+  zone: ZoneMap,
+  weaver: Enemy,
+  isFree: (x: number, y: number) => boolean
+): { x: number; y: number } | null {
+  for (const d of STEP_DIRS) {
+    const nx = weaver.x + d.dx;
+    const ny = weaver.y + d.dy;
+    if (!zone.tiles[ny]?.[nx]?.walkable) continue;
+    if (!isFree(nx, ny)) continue;
+    return { x: nx, y: ny };
+  }
+  return null;
+}
+
+/**
+ * Summon gating, all of it: blight_weaver only, off cooldown, fewer than
+ * SUMMON_CAP living summons of its own, player within SUMMON_RANGE, and a
+ * free adjacent tile. Returns the snapshot tile to prime on, or null.
+ */
+export function primeSummonTile(
+  enemy: Enemy,
+  player: PlayerState,
+  zone: ZoneMap,
+  isFree: (x: number, y: number) => boolean
+): { x: number; y: number } | null {
+  if (enemy.archetype !== 'blight_weaver') return null;
+  if ((enemy.intentCooldowns?.summon ?? 0) > 0) return null;
+  if (chebyshev(enemy.x, enemy.y, player.x, player.y) > SUMMON_RANGE) return null;
+  if (countLivingSummons(zone, enemy.id) >= SUMMON_CAP) return null;
+  return findSummonTile(zone, enemy, isFree);
+}
+
+/**
+ * The ally a mend should be primed on: another living enemy within
+ * MEND_RANGE that is below MEND_WOUNDED_THRESHOLD of its max HP — the most
+ * wounded one (lowest HP fraction; first in zone order wins ties).
+ */
+export function findMendTarget(cultist: Enemy, zone: ZoneMap): Enemy | undefined {
+  let best: Enemy | undefined;
+  let bestRatio = Infinity;
+  for (const ally of zone.enemies) {
+    if (ally.id === cultist.id || ally.hp <= 0) continue;
+    if (ally.hp >= ally.maxHp * MEND_WOUNDED_THRESHOLD) continue;
+    if (chebyshev(cultist.x, cultist.y, ally.x, ally.y) > MEND_RANGE) continue;
+    const ratio = ally.hp / ally.maxHp;
+    if (ratio < bestRatio) {
+      bestRatio = ratio;
+      best = ally;
+    }
+  }
+  return best;
+}
+
+/**
+ * Fire-time mend validation (the primed intent's second half): the target
+ * must still be alive on the board and within MEND_FIRE_RANGE of the
+ * cultist. Returns the capped heal, or undefined when the mend fizzles —
+ * target dead, gone, out of reach, or already full. (A cultist killed or
+ * Bash-stunned before this point never gets here: its primed intent is
+ * deleted by the stun machinery, like every other intent.)
+ */
+export function resolveMend(
+  caster: Enemy,
+  targetEnemyId: string | undefined,
+  zone: ZoneMap,
+  healAmount: number
+): { target: Enemy; heal: number } | undefined {
+  if (!targetEnemyId) return undefined;
+  const target = zone.enemies.find((e) => e.id === targetEnemyId);
+  if (!target || target.hp <= 0) return undefined;
+  if (chebyshev(caster.x, caster.y, target.x, target.y) > MEND_FIRE_RANGE) return undefined;
+  const heal = Math.min(healAmount, target.maxHp - target.hp);
+  if (heal <= 0) return undefined;
+  return { target, heal };
+}
+
+/**
+ * The stalker's lunge line: the player 2–3 tiles away on a straight
+ * cardinal or diagonal line, every intermediate tile walkable and
+ * unoccupied. Returns the line tiles (one step out … the player's tile,
+ * which is the damage snapshot), or null when no lunge is on.
+ */
+export function findLungeLine(
+  zone: ZoneMap,
+  enemy: Enemy,
+  player: PlayerState
+): Array<{ x: number; y: number }> | null {
+  const dx = player.x - enemy.x;
+  const dy = player.y - enemy.y;
+  const dist = Math.max(Math.abs(dx), Math.abs(dy));
+  if (dist < 2 || dist > 3) return null;
+  if (dx !== 0 && dy !== 0 && Math.abs(dx) !== Math.abs(dy)) return null;
+  const sx = Math.sign(dx);
+  const sy = Math.sign(dy);
+  const tiles: Array<{ x: number; y: number }> = [];
+  for (let i = 1; i <= dist; i++) {
+    const tx = enemy.x + sx * i;
+    const ty = enemy.y + sy * i;
+    if (i < dist) {
+      if (!zone.tiles[ty]?.[tx]?.walkable) return null;
+      if (zone.enemies.some((e) => e.id !== enemy.id && e.x === tx && e.y === ty)) return null;
+      if (zone.npcs.some((n) => n.x === tx && n.y === ty)) return null;
+    }
+    tiles.push({ x: tx, y: ty });
+  }
+  return tiles;
+}
+
+/**
+ * Where a fired lunge ends: the stalker dashes along the line and stops on
+ * the last free tile before the first blocked one (the player's tile is
+ * never free, so a connecting lunge ends adjacent to the player). Returns
+ * null when even the first line tile is blocked — the stalker stays put.
+ */
+export function lungeDestination(
+  zone: ZoneMap,
+  lineTiles: Array<{ x: number; y: number }>,
+  isFree: (x: number, y: number) => boolean
+): { x: number; y: number } | null {
+  let dest: { x: number; y: number } | null = null;
+  for (const t of lineTiles) {
+    if (!zone.tiles[t.y]?.[t.x]?.walkable) break;
+    if (!isFree(t.x, t.y)) break;
+    dest = t;
+  }
+  return dest;
+}
+
+/** The lunge intent for a validated line, at the Heavy Strike damage scale. */
+export function buildLungeIntent(
+  enemy: Enemy,
+  line: Array<{ x: number; y: number }>
+): EnemyIntent {
+  const chilled = enemy.statuses.some((s) => s.kind === 'chilled');
+  const dmgScale = chilled ? 0.65 : 1;
+  return {
+    type: 'lunge',
+    label: 'Coiling to Lunge',
+    damage: Math.round(enemy.atk * 1.45 * dmgScale),
+    targetTiles: line,
+  };
+}
+
+/**
+ * Phase 8 fix pack (lunge tuning): the post-move lunge prime. Round-3 live
+ * play showed the turn-start lunge in chooseEnemyIntent almost never primed:
+ * the stalker's own approach step usually closes it into melee before a
+ * straight 2–3 tile line ever exists at a turn boundary. So after the
+ * stalker's movement step, if it actually moved and ENDS that move on a
+ * clear 2–3 tile line with no intent already primed, it gets the same
+ * LUNGE_ROLL here. The primed intent is identical to the turn-start one —
+ * same telegraph, snapshot and WHIFF rules; it fires next turn as usual.
+ * `roll` is supplied by the caller (Math.random() in App) so the decision
+ * stays pure and testable. A stalker whose step was blocked (moved=false)
+ * does not re-roll: it already had its turn-start chance if it was in line.
+ */
+export function shouldPrimeLungeAfterMove(
+  zone: ZoneMap,
+  enemy: Enemy,
+  player: PlayerState,
+  moved: boolean,
+  roll: number
+): EnemyIntent | undefined {
+  if (!moved) return undefined;
+  if (enemy.archetype !== 'shadow_stalker') return undefined;
+  if (enemy.intent) return undefined;
+  if (enemy.statuses.some((s) => s.kind === 'stunned')) return undefined;
+  const line = findLungeLine(zone, enemy, player);
+  if (!line) return undefined;
+  if (roll >= LUNGE_ROLL) return undefined;
+  return buildLungeIntent(enemy, line);
+}
+
+/** Occupancy as chooseEnemyIntent can see it from the zone alone. */
+function zoneTileFree(zone: ZoneMap, player: PlayerState, x: number, y: number): boolean {
+  if (x === player.x && y === player.y) return false;
+  if (zone.enemies.some((e) => e.hp > 0 && e.x === x && e.y === y)) return false;
+  if (zone.npcs.some((n) => n.x === x && n.y === y)) return false;
+  return true;
+}
+
 export function chooseEnemyIntent(enemy: Enemy, player: PlayerState, zone: ZoneMap): EnemyIntent | undefined {
   if (enemy.statuses.some((s) => s.kind === 'stunned')) {
     return undefined;
@@ -151,6 +467,37 @@ export function chooseEnemyIntent(enemy: Enemy, player: PlayerState, zone: ZoneM
     }
   }
 
+  // Phase 8 Tier 2A: Blight Weaver summon — support action, checked before
+  // its hex so an eligible weaver raises mites instead of bolting. The
+  // 12-turn cooldown (set when the intent fires) is the real gate; the roll
+  // only staggers the first summon by a turn or two.
+  const summonTile = primeSummonTile(enemy, player, zone, (x, y) => zoneTileFree(zone, player, x, y));
+  if (summonTile && Math.random() < SUMMON_ROLL) {
+    return {
+      type: 'summon',
+      label: 'Weaving a Summoning',
+      damage: 0,
+      targetTiles: [summonTile],
+    };
+  }
+
+  // Phase 8 Tier 2A: Ash Cultist mend — checked before its hex for the same
+  // reason: a cultist with a wounded ally in reach is a healer first. The
+  // 8-turn cooldown (set when the intent fires) gates the rate.
+  if (enemy.archetype === 'ash_cultist' && (enemy.intentCooldowns?.mend ?? 0) === 0) {
+    const mendTarget = findMendTarget(enemy, zone);
+    if (mendTarget && Math.random() < MEND_ROLL) {
+      return {
+        type: 'mend',
+        label: 'Weaving a Mending',
+        damage: 0,
+        targetTiles: [{ x: mendTarget.x, y: mendTarget.y }],
+        targetEnemyId: mendTarget.id,
+        healAmount: mendHealAmount(zone.depth),
+      };
+    }
+  }
+
   // Boss / heavy archetypes telegraph impactful windups
   if (
     (enemy.archetype === 'iron_golem' ||
@@ -192,7 +539,9 @@ export function chooseEnemyIntent(enemy: Enemy, player: PlayerState, zone: ZoneM
       enemy.archetype === 'rime_revenant' ||
       enemy.archetype === 'boss_bone_cantor' ||
       enemy.archetype === 'boss_malakor') &&
-    dist >= 2 &&
+    // Phase 8 Tier 2A: a cornered non-boss caster (dist 1) casts point-blank
+    // rather than only bumping; bosses keep the original 2–5 band.
+    (dist >= 2 || (dist === 1 && isKitingCaster(enemy))) &&
     dist <= 5 &&
     hasLineOfSight(zone, enemy.x, enemy.y, player.x, player.y) &&
     Math.random() < 0.65
@@ -208,6 +557,17 @@ export function chooseEnemyIntent(enemy: Enemy, player: PlayerState, zone: ZoneM
       damage: Math.round(enemy.atk * 1.25 * dmgScale),
       targetTiles: [{ x: player.x, y: player.y }],
     };
+  }
+
+  // Phase 8 Tier 2A: Shadow Stalker lunge — a telegraphed dash down a clear
+  // 2–3 tile line. Damage lands only if the player is still on the end tile
+  // (the snapshot) when it fires; stepping off the line is a clean WHIFF,
+  // exactly like every other telegraph. Same 1.45x scale as its Heavy Strike.
+  if (enemy.archetype === 'shadow_stalker') {
+    const line = findLungeLine(zone, enemy, player);
+    if (line && Math.random() < LUNGE_ROLL) {
+      return buildLungeIntent(enemy, line);
+    }
   }
 
   if (

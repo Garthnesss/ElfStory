@@ -2,8 +2,13 @@ import React, { useState } from 'react';
 import { Flame, RefreshCw, Sparkles, X } from 'lucide-react';
 import {
   ALL_RUNE_ENCHANTS,
+  canMasterworkTemper,
   formatStatList,
+  MASTERWORK_TEMPER_COST,
   RARITY_COLOR,
+  rerollAffixCost,
+  temperBaseCap,
+  temperCapFor,
 } from '../game/loot';
 import { Item, PlayerState, RuneEnchantId, WorldFlags } from '../game/types';
 
@@ -37,7 +42,7 @@ export const MerchantModal: React.FC<MerchantModalProps> = ({
   const [tab, setTab] = useState<'buy' | 'sell' | 'forge' | 'runeforge'>('buy');
 
   const smithyLv = worldFlags.townUpgrades?.smithy ?? 0;
-  const maxTemperLv = smithyLv >= 2 ? 4 : 3;
+  const maxTemperLv = temperBaseCap(smithyLv);
   const discountMult = smithyLv >= 1 ? 0.75 : 1;
 
   const upgradeCost = (item: Item) => ({
@@ -50,10 +55,20 @@ export const MerchantModal: React.FC<MerchantModalProps> = ({
     dust: Math.max(4, Math.round(10 * discountMult)),
   };
 
-  const reforgeCost = {
-    gold: Math.max(10, Math.round(25 * discountMult)),
-    dust: Math.max(4, Math.round(8 * discountMult)),
+  // Phase 8 Tier 2B: reforge pricing scales with the item's rarity
+  // (see rerollAffixCost in game/loot.ts); the smithy discount applies
+  // on top, as it did to the old flat price.
+  const reforgeCostFor = (item: Item) => {
+    const base = rerollAffixCost(item.rarity);
+    return {
+      gold: Math.max(10, Math.round(base.gold * discountMult)),
+      dust: Math.max(4, Math.round(base.dust * discountMult)),
+    };
   };
+
+  const reforgeGoldLabel = (['Rare', 'Epic', 'Relic'] as const)
+    .map((r) => `${r} ${Math.max(10, Math.round(rerollAffixCost(r).gold * discountMult))}g`)
+    .join(' · ');
 
   const equippedList = Object.values(player.equipped).filter((i): i is Item => Boolean(i));
   const bagEquip = player.inventory.filter((i) => i.category === 'equipment');
@@ -211,14 +226,19 @@ export const MerchantModal: React.FC<MerchantModalProps> = ({
             <div className="space-y-4">
               <p className="text-xs text-slate-400">
                 Temper equipped or carried gear up to +{maxTemperLv} using Gold and Glyph Dust salvaged from spare loot.
+                A weapon or armor at the cap may be pushed one step further as a Masterwork ({MASTERWORK_TEMPER_COST.gold}g · {MASTERWORK_TEMPER_COST.dust} Dust, no Smithy discount).
                 {smithyLv >= 1 ? ' (25% Smithy discount active)' : ''}
               </p>
               {forgeGear.length === 0 ? (
                 <div className="text-xs text-slate-500 py-8 text-center">No equipment to temper.</div>
               ) : (
                 forgeGear.map(({ item, eq }) => {
-                  const cost = upgradeCost(item);
-                  const maxed = item.upgradeLevel >= maxTemperLv;
+                  // Phase 8 Tier 2B: at the normal cap, a weapon/armor may
+                  // still take its one Masterwork step (steep flat price).
+                  const masterworkStep = canMasterworkTemper(item, smithyLv);
+                  const cost = masterworkStep ? MASTERWORK_TEMPER_COST : upgradeCost(item);
+                  const itemCap = temperCapFor(item, smithyLv);
+                  const maxed = !masterworkStep && item.upgradeLevel >= itemCap;
                   const canUpgrade = !maxed && player.gold >= cost.gold && player.glyphDust >= cost.dust;
                   return (
                     <div
@@ -247,7 +267,13 @@ export const MerchantModal: React.FC<MerchantModalProps> = ({
                         onClick={() => onUpgradeItem(item.id, eq)}
                         className="min-h-[44px] px-4 py-2 rounded text-xs font-semibold bg-sky-500 text-[#0B0D12] hover:bg-sky-400 disabled:bg-white/10 disabled:text-slate-500 shrink-0 cursor-pointer font-mono-glyph tabular-nums"
                       >
-                        {maxed ? `Max +${maxTemperLv}` : `Temper (${cost.gold}g · ${cost.dust} Dust)`}
+                        {maxed
+                          ? item.masterwork
+                            ? `Masterwork +${item.upgradeLevel}`
+                            : `Max +${itemCap}`
+                          : masterworkStep
+                            ? `Masterwork Temper (${cost.gold}g · ${cost.dust} Dust)`
+                            : `Temper (${cost.gold}g · ${cost.dust} Dust)`}
                       </button>
                     </div>
                   );
@@ -262,7 +288,7 @@ export const MerchantModal: React.FC<MerchantModalProps> = ({
                 <div className="flex items-center gap-2">
                   <Sparkles className="w-4 h-4 text-sky-300 shrink-0" />
                   <span>
-                    Etch permanent Rune Seals ({runeCost.gold}g · {runeCost.dust} Dust) or Reforge passive Affixes on Rare+ gear ({reforgeCost.gold}g · {reforgeCost.dust} Dust).
+                    Etch permanent Rune Seals ({runeCost.gold}g · {runeCost.dust} Dust) or Reforge passive Affixes on Rare+ gear (price scales with rarity — {reforgeGoldLabel}).
                   </span>
                 </div>
               </div>
@@ -272,6 +298,7 @@ export const MerchantModal: React.FC<MerchantModalProps> = ({
               ) : (
                 forgeGear.map(({ item, eq }) => {
                   const canAffordRune = player.gold >= runeCost.gold && player.glyphDust >= runeCost.dust;
+                  const reforgeCost = reforgeCostFor(item);
                   const canReforge =
                     (item.rarity === 'Rare' || item.rarity === 'Epic' || item.rarity === 'Relic') &&
                     player.gold >= reforgeCost.gold &&

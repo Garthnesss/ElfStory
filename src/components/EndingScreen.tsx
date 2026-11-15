@@ -9,6 +9,8 @@ interface EndingScreenProps {
   playTimeMs?: number | null;
   /** Phase 5: the NG+ cycle this victory was won on (0 = first descent). */
   ngPlusCycle?: number;
+  /** Phase 8 Tier 3: active-challenges display line, when the run had any. */
+  challengesLine?: string;
   /** Phase 5: begin New Game+ at cycle + 1 (optional, like onShowCredits). */
   onAscend?: () => void;
   onContinueAbyss: () => void;
@@ -82,6 +84,7 @@ export const EndingScreen: React.FC<EndingScreenProps> = ({
   worldFlags,
   playTimeMs,
   ngPlusCycle = 0,
+  challengesLine,
   onAscend,
   onContinueAbyss,
   onOpenHallOfFame,
@@ -100,6 +103,12 @@ export const EndingScreen: React.FC<EndingScreenProps> = ({
   }
   if (ngPlusCycle > 0) {
     stats.push({ label: 'Ascension Cycle', value: `Cycle ${ngPlusCycle}` });
+  }
+  if (challengesLine) {
+    stats.push({
+      label: 'Challenges',
+      value: challengesLine.replace(/^Challenges: /, ''),
+    });
   }
 
   return (

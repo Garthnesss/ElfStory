@@ -1,7 +1,43 @@
 import { makeCritter } from './ambient';
-import { scaleEnemyForDifficulty } from './difficulty';
+import { challengeSpawnCount, getCurrentChallenges, hasChallenge } from './challenges';
+import { getCurrentCycle, scaleEnemyForDifficulty } from './difficulty';
 import { createConsumable, generateInscription, generateProceduralItem } from './loot';
-import { CritterState, Enemy, EnemyArchetype, GroundLoot, SkillId, Tile, TileKind, ZoneId, ZoneMap } from './types';
+import { applyMutatorToEnemy, hordeSpawnCount, rollMutator } from './mutators';
+import {
+  floorRngFor,
+  generationSeedFor,
+  getCurrentRunSeed,
+  Rng,
+  setGenerationRng,
+} from './rng';
+import {
+  CritterState,
+  Enemy,
+  EnemyArchetype,
+  FloorMutatorId,
+  GroundLoot,
+  SkillId,
+  Tile,
+  TileKind,
+  ZoneId,
+  ZoneMap,
+} from './types';
+
+/**
+ * Phase 8 Tier 2B: the mutator rolled for the most recently generated
+ * dungeon floor. generateDungeonFloor is called from many places (initial
+ * world build, lazy zone generation on transitions, side-dungeon builder)
+ * and — exactly like the difficulty tier in difficulty.ts — the "previous
+ * floor of the descent" cannot be threaded through every signature, so it
+ * is tracked here: each generated floor avoids repeating the mutator of
+ * the floor generated just before it, which in real play is the floor the
+ * player descended from. An explicit options.previousMutator always wins.
+ * The tracker is in-memory only; after a save reload it starts empty, so
+ * the first newly generated floor of a session may repeat the mutator of a
+ * floor generated before the reload — the no-repeat guarantee is per
+ * generation chain, not across sessions.
+ */
+let lastGeneratedMutator: FloorMutatorId | null = null;
 
 let enemyIdSeq = 1;
 function nextEnemyId(): string {
@@ -601,14 +637,21 @@ const RARE_PROFILES: Array<{ title: string; skills: SkillId[] }> = [
   { title: 'Spellblade', skills: ['ember_lance', 'shield_bash'] },
 ];
 
-export function promoteEnemyRank(enemy: Enemy, depth: number, rank: 'rare' | 'randboss'): Enemy {
-  let profile = RARE_PROFILES[Math.floor(Math.random() * RARE_PROFILES.length)];
+export function promoteEnemyRank(
+  enemy: Enemy,
+  depth: number,
+  rank: 'rare' | 'randboss',
+  // Phase 8 Tier 3: generation-time promotions draw from the floor's
+  // seeded rng; runtime callers keep the Math.random default.
+  rng: Rng = Math.random
+): Enemy {
+  let profile = RARE_PROFILES[Math.floor(rng() * RARE_PROFILES.length)];
   if (enemy.archetype === 'bone_acolyte' || enemy.archetype === 'ash_cultist' || enemy.archetype === 'cinder_wisp') {
-    profile = Math.random() < 0.65 ? RARE_PROFILES[0] : RARE_PROFILES[3];
+    profile = rng() < 0.65 ? RARE_PROFILES[0] : RARE_PROFILES[3];
   } else if (enemy.archetype === 'shadow_stalker' || enemy.archetype === 'goblin_skirmisher') {
     profile = RARE_PROFILES[1];
   } else if (enemy.archetype === 'iron_golem' || enemy.archetype === 'crypt_skeleton') {
-    profile = Math.random() < 0.7 ? RARE_PROFILES[2] : RARE_PROFILES[3];
+    profile = rng() < 0.7 ? RARE_PROFILES[2] : RARE_PROFILES[3];
   }
 
   const isRandboss = rank === 'randboss';
@@ -645,10 +688,128 @@ interface Room {
   cy: number;
 }
 
+/**
+ * Whether the Floor 4 → Floor 5 descent is sealed by Inquisitor Serath
+ * (audit leftover, Nov 14). Serath is the Sanctum's gatekeeper — his
+ * intro vows "None pass into the Sovereign's sanctum unpurged" — but he
+ * stands beside the stairs, so the descent could simply be walked past
+ * him. The stairs on dungeon_4 stay warded until his defeat is recorded
+ * (worldFlags.inquisitorDefeated, set by the kill funnel for the
+ * non-Echo boss_ashen_inquisitor), mirroring the Malakor ward that seals
+ * the Abyssal Descent on Floor 5. Abyssal Echoes of Serath on deeper
+ * floors neither seal nor unseal anything.
+ */
+export function isSerathGateSealed(
+  zoneId: ZoneId,
+  flags: { inquisitorDefeated?: boolean }
+): boolean {
+  return zoneId === 'dungeon_4' && !flags.inquisitorDefeated;
+}
+
+/**
+ * Phase 8 Tier 3: the (zoneKey, depth) of the floor directly above this
+ * one in its descent — used to derive the previous floor's mutator from
+ * its own seeded stream. Main descent: dungeon_N → dungeon_(N-1); side
+ * branches step within their branch (effective depth also steps by 1).
+ * The first floor of a descent has no predecessor.
+ */
+function previousFloorKey(
+  zoneKey: ZoneId | undefined,
+  depth: number
+): { key: ZoneId; depth: number } | undefined {
+  if (!zoneKey) return undefined;
+  const main = /^dungeon_(\d+)$/.exec(zoneKey);
+  if (main) {
+    const n = Number(main[1]);
+    return n > 1 ? { key: `dungeon_${n - 1}` as ZoneId, depth: depth - 1 } : undefined;
+  }
+  const side = /^(barrow|mire|frost)_(\d+)$/.exec(zoneKey);
+  if (side) {
+    const n = Number(side[2]);
+    return n > 1 ? { key: `${side[1]}_${n - 1}` as ZoneId, depth: depth - 1 } : undefined;
+  }
+  return undefined;
+}
+
 export function generateDungeonFloor(
   depth: number,
-  options?: { skipStoryBoss?: boolean; sideBranch?: 'barrow' | 'mire' | 'frost' }
+  options?: {
+    skipStoryBoss?: boolean;
+    sideBranch?: 'barrow' | 'mire' | 'frost';
+    /** Phase 8 Tier 2B: mutator of the previous floor of the descent (never repeated). */
+    previousMutator?: FloorMutatorId | null;
+    /**
+     * Phase 8 Tier 3: the run seed (defaults to the active run seed set
+     * by App). With a seed, this floor's generation draws from a stream
+     * derived from (seed, zoneKey), so the same seed always regenerates
+     * the identical floor. Without one, generation is Math.random —
+     * the legacy path, byte-for-byte the pre-seed game.
+     */
+    seed?: string;
+    /**
+     * Phase 8 Tier 3: the zone this floor will live as (defaults to
+     * `dungeon_${depth}`; side dungeons pass their real id, e.g.
+     * 'barrow_1', so branches at the same effective depth never share a
+     * stream). A side branch WITHOUT a zoneKey stays unseeded.
+     */
+    zoneKey?: ZoneId;
+  }
 ): ZoneMap {
+  // Phase 8 Tier 3: resolve this floor's random stream. Seeded floors
+  // derive everything — layout, dressing, spawns, set pieces, the
+  // mutator roll, and (via the scoped generation rng installed below)
+  // the loot generators' rolls — from (run seed, cycle, zone id), so a
+  // floor dropped by the save pruner regenerates identically on revisit.
+  // Unseeded floors use Math.random itself as the stream, which makes
+  // every draw below behave exactly as it did before seeds existed.
+  const cycle = getCurrentCycle();
+  const runSeed = options?.seed ?? getCurrentRunSeed();
+  const zoneKey: ZoneId | undefined =
+    options?.zoneKey ?? (options?.sideBranch ? undefined : (`dungeon_${depth}` as ZoneId));
+  const seeded = typeof runSeed === 'string' && runSeed.length > 0 && zoneKey !== undefined;
+  const genSeed = seeded ? generationSeedFor(runSeed, cycle) : '';
+  const rng: Rng = seeded ? floorRngFor(genSeed, zoneKey) : Math.random;
+  // Install the floor stream for the loot-generator call chain (loot.ts
+  // draws through generationRandom); restored before the return below.
+  const prevGenerationRng = setGenerationRng(rng);
+
+  // The no-repeat mutator chain: unseeded generation tracks the previous
+  // floor in module state (Tier 2B). Seeded generation cannot — the same
+  // floor must come out identical no matter what was generated before it
+  // in the session — so it DERIVES the previous floor's mutator from the
+  // previous floor's own stream (one level deep, predecessor-free; in a
+  // normally-ordered descent this matches the live chain, and it is
+  // always deterministic). An explicit options.previousMutator wins in
+  // both paths.
+  let previousMutator = options?.previousMutator;
+  if (previousMutator === undefined) {
+    if (seeded) {
+      const prev = previousFloorKey(zoneKey, depth);
+      previousMutator = prev
+        ? rollMutator(floorRngFor(genSeed, prev.key), {
+            depth: prev.depth,
+            cycle,
+            isSideBranch: !!options?.sideBranch,
+            previousMutator: undefined,
+          })
+        : undefined;
+    } else {
+      previousMutator = lastGeneratedMutator;
+    }
+  }
+
+  // Phase 8 Tier 2B: roll this floor's mutator before anything else draws
+  // randomness. Ineligible floors (cycle-0 main descent, cycle-0 side
+  // dungeons) return undefined from rollMutator WITHOUT consuming the rng,
+  // so their generation is byte-for-byte the pre-mutator game.
+  const mutator = rollMutator(rng, {
+    depth,
+    cycle,
+    isSideBranch: !!options?.sideBranch,
+    previousMutator,
+  });
+  if (mutator) lastGeneratedMutator = mutator;
+
   const width = 46;
   const height = 32;
   const tiles: Tile[][] = Array.from({ length: height }, (_, y) =>
@@ -666,10 +827,10 @@ export function generateDungeonFloor(
   const rooms: Room[] = [];
   const targetRooms = Math.min(18, 9 + depth);
   for (let attempt = 0; attempt < 95 && rooms.length < targetRooms; attempt++) {
-    const w = 5 + Math.floor(Math.random() * 5);
-    const h = 4 + Math.floor(Math.random() * 4);
-    const x = 2 + Math.floor(Math.random() * (width - w - 4));
-    const y = 2 + Math.floor(Math.random() * (height - h - 4));
+    const w = 5 + Math.floor(rng() * 5);
+    const h = 4 + Math.floor(rng() * 4);
+    const x = 2 + Math.floor(rng() * (width - w - 4));
+    const y = 2 + Math.floor(rng() * (height - h - 4));
 
     const overlaps = rooms.some(
       (r) => x <= r.x + r.w + 1 && x + w + 1 >= r.x && y <= r.y + r.h + 1 && y + h + 1 >= r.y
@@ -736,7 +897,7 @@ export function generateDungeonFloor(
       tiles[room.y + 1][room.x + 1] = makeTile(room.x + 1, room.y + 1, 'torch');
       tiles[room.y + room.h - 2][room.x + room.w - 2] = makeTile(room.x + room.w - 2, room.y + room.h - 2, 'pillar');
     } else if (
-      Math.random() < 0.65 &&
+      rng() < 0.65 &&
       !tiles[room.y - 1]?.[room.x]?.walkable &&
       !tiles[room.y]?.[room.x - 1]?.walkable &&
       tiles[room.y][room.x].kind === 'floor'
@@ -789,7 +950,7 @@ export function generateDungeonFloor(
     }
   };
 
-  if (candidateRooms.length > 0 && (depth <= 4 || Math.random() < 0.6)) {
+  if (candidateRooms.length > 0 && (depth <= 4 || rng() < 0.6)) {
     const pick = candidateRooms.shift()!;
     specialRoomIndices.add(pick.idx);
     paintRoomFloorTint(pick.room, '#284552');
@@ -1000,8 +1161,8 @@ export function generateDungeonFloor(
   const loot: GroundLoot[] = [];
   rooms.slice(1).forEach((room, idx) => {
     const roomIdx = idx + 1;
-    const rx = room.x + 1 + Math.floor(Math.random() * Math.max(1, room.w - 2));
-    const ry = room.y + 1 + Math.floor(Math.random() * Math.max(1, room.h - 2));
+    const rx = room.x + 1 + Math.floor(rng() * Math.max(1, room.w - 2));
+    const ry = room.y + 1 + Math.floor(rng() * Math.max(1, room.h - 2));
     if (tiles[ry][rx].kind === 'floor' && !specialRoomIndices.has(roomIdx) && !setPieceRoomIndices.has(roomIdx)) {
       if (idx % 3 === 0) {
         tiles[ry][rx] = makeTile(rx, ry, 'chest');
@@ -1010,17 +1171,17 @@ export function generateDungeonFloor(
       } else if (idx === 2) {
         tiles[ry][rx] = makeTile(rx, ry, 'lore_tablet');
         tiles[ry][rx].interactId = `lore_floor_${depth}`;
-      } else if (Math.random() < 0.45) {
+      } else if (rng() < 0.45) {
         // Phase 3: a second trap type — the Venom Dart Snare — joins the
         // Spike Snare in the mix from depth 2 down.
-        const dart = depth >= 2 && Math.random() < 0.4;
+        const dart = depth >= 2 && rng() < 0.4;
         tiles[ry][rx] = makeTile(rx, ry, dart ? 'dart_trap' : 'trap');
       }
     }
     // Scatter thematic floor biome hazards on open floor tiles
-    if (!specialRoomIndices.has(roomIdx) && !setPieceRoomIndices.has(roomIdx) && Math.random() < 0.55) {
-      const hx = room.x + 1 + Math.floor(Math.random() * Math.max(1, room.w - 2));
-      const hy = room.y + 1 + Math.floor(Math.random() * Math.max(1, room.h - 2));
+    if (!specialRoomIndices.has(roomIdx) && !setPieceRoomIndices.has(roomIdx) && rng() < 0.55) {
+      const hx = room.x + 1 + Math.floor(rng() * Math.max(1, room.w - 2));
+      const hy = room.y + 1 + Math.floor(rng() * Math.max(1, room.h - 2));
       if (
         tiles[hy]?.[hx]?.kind === 'floor' &&
         (hx !== spawnPoint.x || hy !== spawnPoint.y) &&
@@ -1030,25 +1191,25 @@ export function generateDungeonFloor(
           depth === 1
             ? 'spore_pool'
             : depth === 2
-              ? Math.random() < 0.7 ? 'frost_vent' : 'spore_pool'
+              ? rng() < 0.7 ? 'frost_vent' : 'spore_pool'
               : depth === 3
                 ? 'ember_crust'
                 : depth === 4
-                  ? Math.random() < 0.7 ? 'shock_rune' : 'ember_crust'
-                  : Math.random() < 0.5 ? 'ember_crust' : 'shock_rune';
+                  ? rng() < 0.7 ? 'shock_rune' : 'ember_crust'
+                  : rng() < 0.5 ? 'ember_crust' : 'shock_rune';
         tiles[hy][hx] = makeTile(hx, hy, hazardKind);
       }
     }
-    if (Math.random() < 0.45) {
-      const lx = room.cx + (Math.random() < 0.5 ? 1 : -1);
+    if (rng() < 0.45) {
+      const lx = room.cx + (rng() < 0.5 ? 1 : -1);
       const ly = room.cy;
       if (tiles[ly]?.[lx]?.walkable && tiles[ly]?.[lx]?.kind === 'floor') {
         loot.push({
           id: `gl_${depth}_${idx}`,
           x: lx,
           y: ly,
-          gold: Math.random() < 0.5 ? 8 + depth * 5 : undefined,
-          item: Math.random() < 0.6 ? createConsumable(Math.random() < 0.6 ? 'heal_potion' : 'mana_potion', 1) : generateProceduralItem(depth),
+          gold: rng() < 0.5 ? 8 + depth * 5 : undefined,
+          item: rng() < 0.6 ? createConsumable(rng() < 0.6 ? 'heal_potion' : 'mana_potion', 1) : generateProceduralItem(depth),
         });
       }
     }
@@ -1132,7 +1293,8 @@ export function generateDungeonFloor(
       const mini = promoteEnemyRank(
         createEnemy(miniArch, Math.max(room.x + 1, room.cx - 1), room.cy, depth),
         depth,
-        miniRank
+        miniRank,
+        rng
       );
       mini.name =
         depth === 1
@@ -1145,11 +1307,18 @@ export function generateDungeonFloor(
       return;
     }
 
-    const count = 1 + (Math.random() < 0.65 ? 1 : 0) + (depth >= 3 && Math.random() < 0.35 ? 1 : 0);
+    let count = 1 + (rng() < 0.65 ? 1 : 0) + (depth >= 3 && rng() < 0.35 ? 1 : 0);
+    // Phase 8 Tier 2B: Horde floors crowd +40% more foes into every room.
+    if (mutator === 'horde') count = hordeSpawnCount(count, rng());
+    // Phase 8 Tier 3: the Horde World challenge crowds +30% more on ANY
+    // floor (stacking with the mutator when both apply).
+    if (hasChallenge(getCurrentChallenges(), 'horde_world')) {
+      count = challengeSpawnCount(count, rng(), getCurrentChallenges());
+    }
     const pool = activePool;
     for (let i = 0; i < count; i++) {
-      const ex = room.x + 1 + Math.floor(Math.random() * Math.max(1, room.w - 2));
-      const ey = room.y + 1 + Math.floor(Math.random() * Math.max(1, room.h - 2));
+      const ex = room.x + 1 + Math.floor(rng() * Math.max(1, room.w - 2));
+      const ey = room.y + 1 + Math.floor(rng() * Math.max(1, room.h - 2));
       if (
         tiles[ey][ex].walkable &&
         tiles[ey][ex].kind === 'floor' &&
@@ -1157,13 +1326,13 @@ export function generateDungeonFloor(
         (ex !== returnPoint.x || ey !== returnPoint.y) &&
         !enemies.some((e) => e.x === ex && e.y === ey)
       ) {
-        const arch = pool[Math.floor(Math.random() * pool.length)];
+        const arch = pool[Math.floor(rng() * pool.length)];
         let created = createEnemy(arch, ex, ey, depth);
-        if (depth >= 6 && !roamingRandbossSpawned && i === 0 && Math.random() < 0.12) {
-          created = promoteEnemyRank(created, depth, 'randboss');
+        if (depth >= 6 && !roamingRandbossSpawned && i === 0 && rng() < 0.12) {
+          created = promoteEnemyRank(created, depth, 'randboss', rng);
           roamingRandbossSpawned = true;
-        } else if (depth >= 2 && rareCount < 2 && i === 0 && Math.random() < 0.16) {
-          created = promoteEnemyRank(created, depth, 'rare');
+        } else if (depth >= 2 && rareCount < 2 && i === 0 && rng() < 0.16) {
+          created = promoteEnemyRank(created, depth, 'rare', rng);
           rareCount += 1;
         }
         enemies.push(created);
@@ -1172,7 +1341,7 @@ export function generateDungeonFloor(
   });
 
   // Sealed High-Risk Treasure Vault Chamber (Depth 2+)
-  if (depth >= 2 && Math.random() < 0.88) {
+  if (depth >= 2 && rng() < 0.88) {
     const floorPoints: Array<{ x: number; y: number }> = [];
     for (let y = 2; y < height - 2; y++) {
       for (let x = 2; x < width - 2; x++) {
@@ -1272,20 +1441,21 @@ export function generateDungeonFloor(
         : depth >= 6
           ? abyssPool
           : (pools[depth] ?? pools[2]);
-      const guardArch = vaultPool[Math.floor(Math.random() * vaultPool.length)];
+      const guardArch = vaultPool[Math.floor(rng() * vaultPool.length)];
       // P1: guard is created at the floor's own depth and only becomes a
       // randboss in the Abyss (depth >= 6), so a vault guard can no longer
       // out-stat the final boss on the floor where he waits.
       const mainGuard = promoteEnemyRank(
         createEnemy(guardArch, vx + 3, vy + 2, depth),
         depth,
-        depth >= 6 ? 'randboss' : 'rare'
+        depth >= 6 ? 'randboss' : 'rare',
+        rng
       );
       enemies.push(mainGuard);
 
       if (depth >= 3) {
-        const wingArch = vaultPool[Math.floor(Math.random() * vaultPool.length)];
-        const wingGuard = promoteEnemyRank(createEnemy(wingArch, vx + 2, vy + 3, depth), depth, 'rare');
+        const wingArch = vaultPool[Math.floor(rng() * vaultPool.length)];
+        const wingGuard = promoteEnemyRank(createEnemy(wingArch, vx + 2, vy + 3, depth), depth, 'rare', rng);
         enemies.push(wingGuard);
       }
     }
@@ -1357,11 +1527,11 @@ export function generateDungeonFloor(
   // non-blocking — they only ever stand on plain floor and flee the player.
   const critters: CritterState[] = [];
   for (let attempt = 0; attempt < 3; attempt++) {
-    if (Math.random() >= 0.65) continue;
-    const room = rooms[1 + Math.floor(Math.random() * Math.max(1, rooms.length - 1))];
+    if (rng() >= 0.65) continue;
+    const room = rooms[1 + Math.floor(rng() * Math.max(1, rooms.length - 1))];
     if (!room) continue;
-    const bx = room.x + 1 + Math.floor(Math.random() * Math.max(1, room.w - 2));
-    const by = room.y + 1 + Math.floor(Math.random() * Math.max(1, room.h - 2));
+    const bx = room.x + 1 + Math.floor(rng() * Math.max(1, room.w - 2));
+    const by = room.y + 1 + Math.floor(rng() * Math.max(1, room.h - 2));
     if (
       tiles[by]?.[bx]?.kind === 'floor' &&
       (bx !== spawnPoint.x || by !== spawnPoint.y) &&
@@ -1377,16 +1547,23 @@ export function generateDungeonFloor(
     (depth >= 6
       ? { name: 'The Endless Abyss', subtitle: `Floor ${depth} · Abyssal Depths` }
       : biomeNames[1]);
+  // Phase 8 Tier 2B: fold the mutator's enemy multipliers into the finished
+  // floor (bosses exempt — applyMutatorToEnemy returns them unchanged).
+  const finalEnemies = mutator ? enemies.map((e) => applyMutatorToEnemy(e, mutator)) : enemies;
+  // Phase 8 Tier 3: the scoped generation rng ends with this call — later
+  // loot rolls (drops, chests) are back on Math.random.
+  setGenerationRng(prevGenerationRng);
   return {
     id: `dungeon_${depth}` as ZoneId,
     name: info.name,
     subtitle: info.subtitle,
     isTown: false,
     depth,
+    ...(mutator ? { mutator } : {}),
     width,
     height,
     tiles,
-    enemies,
+    enemies: finalEnemies,
     npcs: [],
     critters,
     loot,
@@ -1626,7 +1803,11 @@ export function createOverworldMap(): ZoneMap {
 
 export function generateSideDungeonFloor(
   branch: 'barrow' | 'mire' | 'frost',
-  floorNum: number
+  floorNum: number,
+  options?: {
+    /** Phase 8 Tier 3: run seed (defaults to the active run seed). */
+    seed?: string;
+  }
 ): ZoneMap {
   const effectiveDepth =
     branch === 'barrow'
@@ -1635,8 +1816,13 @@ export function generateSideDungeonFloor(
         ? 2 + floorNum
         : 3 + floorNum;
 
-  const zone = generateDungeonFloor(effectiveDepth, { skipStoryBoss: true, sideBranch: branch });
   const zoneId = `${branch}_${floorNum}` as ZoneId;
+  const zone = generateDungeonFloor(effectiveDepth, {
+    skipStoryBoss: true,
+    sideBranch: branch,
+    seed: options?.seed,
+    zoneKey: zoneId,
+  });
   zone.id = zoneId;
 
   const titles: Record<
@@ -1770,10 +1956,20 @@ export function generateSideDungeonFloor(
       zone.enemies = zone.enemies.filter((e) => e.x !== bx || e.y !== by);
     }
 
+    // Phase 8 Tier 3: the side boss's rank promotion is part of the
+    // floor's generation, so on a seeded run it draws from a stream
+    // derived for this zone (suffixed so it cannot alias the floor's own
+    // stream position-for-position).
+    const sideSeed = options?.seed ?? getCurrentRunSeed();
+    const bossRng: Rng =
+      typeof sideSeed === 'string' && sideSeed.length > 0
+        ? floorRngFor(generationSeedFor(sideSeed, getCurrentCycle()), `${zoneId}::boss`)
+        : Math.random;
     const boss = promoteEnemyRank(
       createEnemy(meta.boss.arch, bx, by, effectiveDepth + 1),
       effectiveDepth + 1,
-      'randboss'
+      'randboss',
+      bossRng
     );
     // P1: side bosses are tuned explicitly so none of them out-stats the
     // final boss (the Kaelthar inversion: 359 HP / 57 ATK vs Malakor's
@@ -1798,7 +1994,7 @@ export function generateSideDungeonFloor(
   return zone;
 }
 
-export function generateZoneById(zoneId: ZoneId): ZoneMap | null {
+export function generateZoneById(zoneId: ZoneId, seed?: string): ZoneMap | null {
   if (zoneId === 'oakhaven') return createOakhavenMap();
   if (zoneId === 'overworld') return createOverworldMap();
   if (zoneId === 'highspire') return createHighspireMap();
@@ -1806,35 +2002,35 @@ export function generateZoneById(zoneId: ZoneId): ZoneMap | null {
   if (zoneId === 'cinderwatch') return createCinderwatchMap();
   if (zoneId.startsWith('dungeon_')) {
     const d = Number(zoneId.replace('dungeon_', ''));
-    return Number.isFinite(d) && d >= 1 ? generateDungeonFloor(d) : null;
+    return Number.isFinite(d) && d >= 1 ? generateDungeonFloor(d, { seed }) : null;
   }
   if (zoneId.startsWith('barrow_')) {
     const f = Number(zoneId.replace('barrow_', ''));
-    return Number.isFinite(f) && f >= 1 && f <= 2 ? generateSideDungeonFloor('barrow', f) : null;
+    return Number.isFinite(f) && f >= 1 && f <= 2 ? generateSideDungeonFloor('barrow', f, { seed }) : null;
   }
   if (zoneId.startsWith('mire_')) {
     const f = Number(zoneId.replace('mire_', ''));
-    return Number.isFinite(f) && f >= 1 && f <= 2 ? generateSideDungeonFloor('mire', f) : null;
+    return Number.isFinite(f) && f >= 1 && f <= 2 ? generateSideDungeonFloor('mire', f, { seed }) : null;
   }
   if (zoneId.startsWith('frost_')) {
     const f = Number(zoneId.replace('frost_', ''));
-    return Number.isFinite(f) && f >= 1 && f <= 3 ? generateSideDungeonFloor('frost', f) : null;
+    return Number.isFinite(f) && f >= 1 && f <= 3 ? generateSideDungeonFloor('frost', f, { seed }) : null;
   }
   return null;
 }
 
-export function createInitialZones(): Record<ZoneId, ZoneMap> {
+export function createInitialZones(seed?: string): Record<ZoneId, ZoneMap> {
   return {
     oakhaven: createOakhavenMap(),
     overworld: createOverworldMap(),
     highspire: createHighspireMap(),
     thornwick: createThornwickMap(),
     cinderwatch: createCinderwatchMap(),
-    dungeon_1: generateDungeonFloor(1),
-    dungeon_2: generateDungeonFloor(2),
-    dungeon_3: generateDungeonFloor(3),
-    dungeon_4: generateDungeonFloor(4),
-    dungeon_5: generateDungeonFloor(5),
+    dungeon_1: generateDungeonFloor(1, { seed }),
+    dungeon_2: generateDungeonFloor(2, { seed }),
+    dungeon_3: generateDungeonFloor(3, { seed }),
+    dungeon_4: generateDungeonFloor(4, { seed }),
+    dungeon_5: generateDungeonFloor(5, { seed }),
   };
 }
 

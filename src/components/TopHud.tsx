@@ -1,5 +1,6 @@
 import React from 'react';
 import { Volume2, VolumeX } from 'lucide-react';
+import { mutatorName } from '../game/mutators';
 import { DerivedStats, PlayerState, ZoneMap } from '../game/types';
 
 interface TopHudProps {
@@ -33,7 +34,16 @@ export const TopHud: React.FC<TopHudProps> = ({
         <span className="font-display text-xs sm:text-sm font-semibold text-amber-200 whitespace-nowrap truncate max-w-[130px] sm:max-w-none">
           {zone.name}
         </span>
-        <span className="xl:hidden text-[11px] font-mono-glyph text-slate-300 whitespace-nowrap tabular-nums">
+        {/* Phase 8 Tier 2B: persistent floor-mutator indicator beside the zone name.
+            Phase 8 fix pack: shrink-0 — under header pressure the truncating
+            name/subtitle are the pressure valves, never this chip (it used to
+            overflow the squeezed cluster and get painted over by the vitals). */}
+        {zone.mutator && (
+          <span className="shrink-0 text-[10px] sm:text-[11px] font-mono-glyph px-1.5 py-0.5 rounded border border-fuchsia-400/40 bg-fuchsia-500/10 text-fuchsia-200 whitespace-nowrap">
+            {mutatorName(zone.mutator)}
+          </span>
+        )}
+        <span className="2xl:hidden text-[11px] font-mono-glyph text-slate-300 whitespace-nowrap tabular-nums">
           Lv {player.level} · <span className="text-amber-300">{player.gold}g</span>
         </span>
         <span className="text-slate-600 hidden xl:inline" aria-hidden="true">·</span>
@@ -72,8 +82,11 @@ export const TopHud: React.FC<TopHudProps> = ({
           </span>
         </div>
 
-        {/* Level, Build Title & Gold */}
-        <div className="hidden xl:flex items-center gap-2 text-xs text-slate-300 font-mono-glyph tabular-nums">
+        {/* Level, Build Title & Gold. Phase 8 fix pack: shown from 2xl up
+            (was xl) — at 1280–1535 this cluster plus the shrink-0 nav left
+            ~12px for the zone cluster and clipped the mutator chip; the
+            compact Lv/gold readout in the zone cluster covers that band. */}
+        <div className="hidden 2xl:flex items-center gap-2 text-xs text-slate-300 font-mono-glyph tabular-nums">
           <span className="font-sans font-medium text-[#ECE4D4]">{player.name}</span>
           <span className="text-slate-600">·</span>
           <span className="text-amber-300">Lv {player.level}</span>

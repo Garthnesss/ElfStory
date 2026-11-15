@@ -1,3 +1,4 @@
+import { adjustDerivedForChallenges, getCurrentChallenges } from './challenges';
 import { computeBestiaryPerks } from './codex';
 import {
   AttributeKey,
@@ -496,21 +497,33 @@ export function computeDerivedStats(player: PlayerState, worldFlags?: WorldFlags
     } else if (st.kind === 'spine_guard') {
       def += 5;
       thorns += 6;
+    } else if (st.kind === 'blessing_might') {
+      // Phase 8 Tier 2B: shrine blessings (see game/blessings.ts).
+      atk += st.potency;
+    } else if (st.kind === 'blessing_ward') {
+      def += st.potency;
+    } else if (st.kind === 'blessing_vigor') {
+      maxHp += st.potency;
     }
   }
 
-  return {
-    maxHp,
-    maxMana,
-    atk,
-    def,
-    spellPower,
-    critChance: Math.min(75, Math.round(critChance)),
-    dodgeChance: Math.min(55, Math.round(dodgeChance)),
-    lifesteal,
-    thorns,
-    buildTitle: computeBuildTitle(player),
-  };
+  // Phase 8 Tier 3: Glass Cannon folds in here, at the end of the single
+  // derived-stat funnel — identity when the challenge is not active.
+  return adjustDerivedForChallenges(
+    {
+      maxHp,
+      maxMana,
+      atk,
+      def,
+      spellPower,
+      critChance: Math.min(75, Math.round(critChance)),
+      dodgeChance: Math.min(55, Math.round(dodgeChance)),
+      lifesteal,
+      thorns,
+      buildTitle: computeBuildTitle(player),
+    },
+    getCurrentChallenges()
+  );
 }
 
 export const PRODIGIES: Record<ProdigyId, ProdigyDef> = {
