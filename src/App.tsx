@@ -641,6 +641,13 @@ export default function App() {
 
   const recordedVictoryRef = useRef(false);
   const recordedFallenRef = useRef(false);
+  // Phase 7: quest ids whose completion rewards have been paid in this
+  // run. The complete_quest handler checks and records synchronously, so
+  // a completion can never pay twice — not even via a same-frame double
+  // submit that re-runs the handler on a stale state closure. Seeded
+  // from the bundle on load; cleared when a fresh run begins (new game
+  // or NG+ ascension), where every quest may complete once more.
+  const questRewardGuardRef = useRef<Set<string>>(new Set());
 
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [authBusy, setAuthBusy] = useState(false);
@@ -1302,6 +1309,7 @@ export default function App() {
       setCurrentZoneId('oakhaven');
       setWorldFlags(initialFlags);
       setQuests({});
+      questRewardGuardRef.current = new Set();
       setMerchantStocks(createInitialMerchants());
       setArmedSkill(null);
       setArmedInscriptionSlot(null);
@@ -1406,6 +1414,12 @@ export default function App() {
     setCurrentZoneId(data.currentZoneId);
     setWorldFlags(normalizedFlags);
     setQuests(data.quests);
+    // Phase 7: completions already paid in the loaded run stay paid.
+    questRewardGuardRef.current = new Set(
+      Object.values(data.quests ?? {})
+        .filter((q) => q.status === 'completed')
+        .map((q) => q.id)
+    );
     setMerchantStocks({
       ...createInitialMerchants(),
       ...data.merchantStocks,
@@ -1419,7 +1433,12 @@ export default function App() {
     setZoneBanner(null);
     runStartedAtRef.current = Date.now();
     setTutorialStepIdx(null);
-    setGameState('PLAYING');
+    // Phase 7: a bundle saved on the death turn itself (hp <= 0, before
+    // the death flow could stamp or resolve it) loads into the proper
+    // GAME_OVER screen — never into a frozen scene where the turn loop
+    // no longer runs. In a hardcore run the GAME_OVER effect then
+    // applies the death stamp, closing the tab-close race as well.
+    setGameState(normalizedPlayer.hp <= 0 ? 'GAME_OVER' : 'PLAYING');
     soundEngine.playClick();
   }, [applyCycle, applyDifficulty, applyHardcore, bumpLifetime, updateCompletedAtMs]);
 
@@ -1480,6 +1499,7 @@ export default function App() {
     setCurrentZoneId('oakhaven');
     setWorldFlags(freshFlags);
     setQuests({});
+    questRewardGuardRef.current = new Set();
     setMerchantStocks(freshMerchants);
     setArmedSkill(null);
     setArmedInscriptionSlot(null);
@@ -5387,33 +5407,45 @@ export default function App() {
             };
           });
         } else if (act.type === 'complete_quest') {
-          setQuests((prev) => {
-            const cur = prev[act.questId];
-            return {
-              ...prev,
-              [act.questId]: {
-                id: act.questId,
-                status: 'completed',
-                stage: 3,
-                outcomeLabel: act.outcomeLabel,
-                history: [...(cur?.history ?? []), act.log],
-              },
-            };
-          });
-          if (act.rewardGold) nextP.gold += act.rewardGold;
-          if (act.rewardSkillPoint) nextP.skillPoints += act.rewardSkillPoint;
-          if (act.rewardAttrPoint) nextP.attributePoints += act.rewardAttrPoint;
-          if (act.rewardItemTag) {
-            const relic = createNamedRelic(act.rewardItemTag);
-            nextP = addItemToPlayer(nextP, relic);
-            pushLog(`Received ${relic.name}!`, 'loot');
+          // Phase 7: a completion pays exactly once. Dialogue gating
+          // already hides the turn-in after a quest completes; this guard
+          // makes the handler itself refuse a second payout (e.g. a
+          // same-frame double submit re-running on a stale closure).
+          if (
+            questRewardGuardRef.current.has(act.questId) ||
+            quests[act.questId]?.status === 'completed'
+          ) {
+            // Already paid — no rewards, no duplicate completion entry.
+          } else {
+            questRewardGuardRef.current.add(act.questId);
+            setQuests((prev) => {
+              const cur = prev[act.questId];
+              return {
+                ...prev,
+                [act.questId]: {
+                  id: act.questId,
+                  status: 'completed',
+                  stage: 3,
+                  outcomeLabel: act.outcomeLabel,
+                  history: [...(cur?.history ?? []), act.log],
+                },
+              };
+            });
+            if (act.rewardGold) nextP.gold += act.rewardGold;
+            if (act.rewardSkillPoint) nextP.skillPoints += act.rewardSkillPoint;
+            if (act.rewardAttrPoint) nextP.attributePoints += act.rewardAttrPoint;
+            if (act.rewardItemTag) {
+              const relic = createNamedRelic(act.rewardItemTag);
+              nextP = addItemToPlayer(nextP, relic);
+              pushLog(`Received ${relic.name}!`, 'loot');
+            }
+            if (act.rewardXp) {
+              const xpRes = grantXpAndCheckLevel(nextP, act.rewardXp, nextFlags);
+              nextP = xpRes.nextPlayer;
+            }
+            soundEngine.playLevelUp();
+            pushLog(`Quest Completed: ${QUEST_DEFS[act.questId]?.title ?? act.questId}`, 'quest');
           }
-          if (act.rewardXp) {
-            const xpRes = grantXpAndCheckLevel(nextP, act.rewardXp, nextFlags);
-            nextP = xpRes.nextPlayer;
-          }
-          soundEngine.playLevelUp();
-          pushLog(`Quest Completed: ${QUEST_DEFS[act.questId]?.title ?? act.questId}`, 'quest');
         }
       }
 
@@ -6111,11 +6143,20 @@ export default function App() {
     if (!item || item.category === 'quest') return;
     const sellPrice = Math.max(4, Math.round(item.value * 0.55));
     soundEngine.playLoot();
-    setPlayer((prev) => ({
-      ...prev,
-      gold: prev.gold + sellPrice,
-      inventory: prev.inventory.filter((i) => i.id !== itemId),
-    }));
+    setPlayer((prev) => {
+      const idx = prev.inventory.findIndex((i) => i.id === itemId);
+      if (idx < 0) return prev;
+      const cur = prev.inventory[idx];
+      // Phase 7: a stacked consumable sells ONE unit at the shown price
+      // (previously the whole stack was removed for a single payout).
+      const nextInv = [...prev.inventory];
+      if ((cur.quantity ?? 1) > 1) {
+        nextInv[idx] = { ...cur, quantity: (cur.quantity ?? 1) - 1 };
+      } else {
+        nextInv.splice(idx, 1);
+      }
+      return { ...prev, gold: prev.gold + sellPrice, inventory: nextInv };
+    });
     pushLog(`Sold ${item.name} for +${sellPrice}g.`, 'loot');
   };
 
@@ -6744,6 +6785,8 @@ export default function App() {
           authUser={authUser}
           cloudBusy={authBusy || cloudSaving}
           onSignIn={handleSignInGoogle}
+          canReturnToEnding={Boolean(worldFlags.malakorDefeated)}
+          onReturnToEnding={() => setGameState('VICTORY')}
           onResume={() => setGameState('PLAYING')}
           onSaveRun={async () => {
             const bundle: SavedBundle = {

@@ -24,6 +24,11 @@ interface EndPauseModalProps {
   onReturnToTitle: () => void;
   /** Phase 2: settings are reachable from the pause menu too. */
   onOpenSettings?: () => void;
+  /** Phase 7: when this run has already felled Malakor, the pause menu
+   *  offers a way back to the Ending Screen — and its New Game+ ascend —
+   *  which a save/reload after victory would otherwise strand. */
+  canReturnToEnding?: boolean;
+  onReturnToEnding?: () => void;
 }
 
 const SLOT_LABEL: Record<SaveSlotId, string> = {
@@ -49,6 +54,8 @@ export const EndPauseModal: React.FC<EndPauseModalProps> = ({
   onPlayAgain,
   onReturnToTitle,
   onOpenSettings,
+  canReturnToEnding = false,
+  onReturnToEnding,
 }) => {
   const title =
     mode === 'VICTORY'
@@ -160,6 +167,15 @@ export const EndPauseModal: React.FC<EndPauseModalProps> = ({
                     ? `Save ${SLOT_LABEL[activeSlot]} (Cloud & Local)`
                     : `Save ${SLOT_LABEL[activeSlot]} Locally`}
               </button>
+              {canReturnToEnding && onReturnToEnding && (
+                <button
+                  type="button"
+                  onClick={onReturnToEnding}
+                  className="min-h-[44px] w-full py-2.5 rounded border border-amber-400/50 bg-amber-500/15 hover:bg-amber-500/25 text-amber-200 font-semibold text-sm cursor-pointer"
+                >
+                  ✦ Return to the Ending
+                </button>
+              )}
               {!authUser && (
                 <button
                   type="button"

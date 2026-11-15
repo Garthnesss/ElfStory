@@ -131,13 +131,25 @@ test('Phase 6 PWA: manifest is valid and carries the required fields', () => {
 
 test('Phase 6 PWA: service worker has the versioned cache + navigation fallback', () => {
   const sw = readFileSync(new URL('../public/sw.js', import.meta.url), 'utf8');
-  assert.ok(sw.includes("const CACHE_NAME = 'elfstory-shell-v1'"), 'versioned shell cache name');
+  // Phase 7: bumped to v2 to retire the v1 shell, whose cache never held
+  // the app bundle (offline boot served HTML with no game in it).
+  assert.ok(sw.includes("const CACHE_NAME = 'elfstory-shell-v2'"), 'versioned shell cache name');
   assert.ok(sw.includes("request.mode === 'navigate'"), 'navigation requests are handled');
   assert.ok(sw.includes('index.html'), 'navigation fallback serves the cached index');
   assert.ok(sw.includes('caches.delete'), 'activation cleans up older caches');
   // The shell list covers the manifest + icon the manifest points at.
   assert.ok(sw.includes('manifest.webmanifest'));
   assert.ok(sw.includes('icons/emblem.svg'));
+});
+
+test('Phase 7 PWA: service worker runtime-caches same-origin assets for offline boot', () => {
+  const sw = readFileSync(new URL('../public/sw.js', import.meta.url), 'utf8');
+  assert.ok(sw.includes('cache.put(request, copy)'), 'fetched assets are stored at runtime');
+  assert.ok(
+    sw.includes('new URL(request.url).origin === self.location.origin'),
+    'only same-origin responses are runtime-cached'
+  );
+  assert.ok(sw.includes('response.ok'), 'only successful responses are cached');
 });
 
 // ------------------------------------------------------- accessibility

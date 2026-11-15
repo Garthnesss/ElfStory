@@ -1,9 +1,15 @@
 # ElfStory — Status
 
 **Last updated:** 2026-11-14
-**Phase:** Phase 5 + 6 — "Ascension" + "Reach & refinement" (both complete and merged into this tree Nov 14, 2026; verified by tests + typecheck + build + difficulty sim; awaiting Garth's review/push and hand play-checks)
+**Phase:** Phase 7 — fix pack (complete Nov 14, 2026; Phases 5 + 6 merged into this tree the same day). Merged tree verification: `npm test` **97/97**, `tsc --noEmit` clean, `vite build` clean, difficulty sim re-verified. Awaiting Garth's hand play-checks.
 
 ## Where things stand
+- **Phase 7 — fix pack (Nov 14, 2026)** — implemented; tests + live smoke by Muse:
+  - Completed runs can return to the Ending Screen from the pause menu (gated on `worldFlags.malakorDefeated`), so the NG+ ascend survives save/reload instead of existing only in the live victory moment.
+  - Service worker runtime-caches same-origin assets and the cache name is bumped to `elfstory-shell-v2` — an installed PWA now boots offline, not just its HTML shell.
+  - Save bundles with hp ≤ 0 load into GAME_OVER instead of a frozen state.
+  - The `complete_quest` handler refuses to pay rewards twice (status guard, defence-in-depth behind the dialogue gating).
+  - Selling a stacked consumable sells one unit at the shown price (was: whole stack removed for one unit's price).
 - **P5 ascension — DONE, VERIFIED** (Nov 14, 2026; `npm test` **86/86** — 69 prior + 17 new Phase 5 tests — `tsc --noEmit` clean, `vite build` clean; P1 tuning + Phase 4 difficulty untouched and re-verified with `tools/difficulty_sim.py`, which now also prints NG+1/NG+3 Malakor lines):
   - **NG+ / Ascension cycles** (`src/game/difficulty.ts` cycle scaler + `handleAscendNgPlus` in App): the Ending Screen's "Begin New Game+ — Cycle N+1" rebuilds the world fresh (same construction as a new expedition) while the player keeps level, attributes, skill points/skills, equipment, inventory, gold, glyph dust, and companion; kills/turns/quests/flags/merchants reset; difficulty, hardcore, and the completion stamp carry over. Cycle multipliers — HP ×(1 + 0.35·cycle), ATK ×(1 + 0.25·cycle), XP ×(1 + 0.20·cycle) — compose multiplicatively with the tier inside the same `scaleEnemyForDifficulty` / `scaleXpForDifficulty` funnels; Standard + cycle 0 is identity (test-pinned: skeleton 58/11, Malakor 1000/36, Morvath 376/24; cycle 1: 78/14, 1350/45, 509/31; cycle 3: 119/19, 2050/63, 774/42). Cycle stored as `ngPlusCycle` in the bundle, shown in slot summaries and pause stats.
   - **Hardcore (permadeath)** (Title Screen toggle + `hardcore` bundle field, creation-only): death stamps the bundle `deadAtMs` + death note via a GAME_OVER effect and persists immediately; the Title Screen renders the slot "☠ Fallen — Cycle N · Fell on Floor F · …" with Load disabled and Delete working; `applySavedBundle` refuses dead bundles as defence-in-depth; the fallen chronicle entry records through the normal path. Non-hardcore game-over flow is byte-for-byte the old one.
@@ -30,7 +36,7 @@
   - Autosave: local save every 25 turns while PLAYING + on tab hide/close (local-only); mute persisted (`elfstory-muted`), zoom persisted (`elfstory-tile-size`).
   - ErrorBoundary in `src/main.tsx`: a render crash now shows a recoverable "lantern guttered out" screen with reload, instead of a white page.
   - Not play-tested in a live browser by Muse (no browser on the VM reaches the local build) — the verification is test/typecheck/build + code-level repro closure. Garth's first run in the new repo is the by-hand check.
-- **Repo — LIVE** (Nov 14, 2026): **Garthnesss/ElfStory** (public). P0 tree pushed by Muse via the official GitHub connector (commit `42e0b5f`); the 14 JPGs could not ride the text-only snapshot push and were committed on the Mac clone (`e46a711`) — one `git push` from Garth's GUI Terminal (or `~/sync-all.sh`) lands them. (The legacy gh-api route 401s; the official connector is the working route.)
+- **Repo — LIVE** (Nov 14, 2026): **Garthnesss/ElfStory** (public). Remote `main` is at `605cc11` — all phases (P0–P6 source plus the Phase 5+6 GitHub Pages build in `docs/`) pushed by Muse via the official GitHub connector, and Pages verified serving the P5+6 build. The 14 JPGs could not ride the text-only snapshot push; they were committed on the Mac clone and rebased onto `605cc11` as `b37655f` — one `git push` from Garth's GUI Terminal (or `~/sync-all.sh`) lands them, after which a fresh clone builds. (The legacy gh-api route 401s; the official connector is the working route.)
 - **P1 difficulty rebalance — DONE, VERIFIED** (Nov 14, 2026; `npm test` **17/17**, `tsc` clean, `vite build` clean; tuning verified with `tools/difficulty_sim.py`, which parses its constants from the game source so it cannot drift):
   - Normal enemies: base HP roughly ×2.3 and early ATK up — F1 trash now takes 2–3 hits instead of being one-shot, and F1–F2 hits register past starter DEF.
   - Story bosses scaled to expected arrival level: Vaelen 95→420 HP, Serath 145→690, Malakor 230→1000 HP / 24→36 ATK (TTK ≈ 8 / 8 / 10 basic attacks). Bell-weakened Malakor now loses 180 HP instead of 45.
@@ -58,7 +64,7 @@
 - Four canonical docs live in the project root (standing rule, Oct 28, 2026; applied to ElfStory Nov 14, 2026).
 
 ## Open decisions (need Garth's call)
-1. **Push the JPG commit** — Mac clone has `e46a711` (the 14 portraits/backdrop) committed and ready; needs one `git push` from the GUI Terminal (SSH sessions can't read the keychain) or a `~/sync-all.sh` run.
+1. **Push the JPG commit** — Mac clone has `b37655f` (the 14 portraits/backdrop, rebased onto remote main `605cc11`) committed and ready; needs one `git push` from the GUI Terminal (SSH sessions can't read the keychain) or a `~/sync-all.sh` run.
 2. **By-hand play check** — P0 + P1 are test/sim/build-verified, not yet hand-played. First run: does F1 feel fair at 2–3 hits per enemy, and do the bosses feel like bosses?
 3. **Audit report in-repo?** — copy `elfstory-adversarial-audit.md` into the repo (e.g. `docs/`) or keep it in Garth's files only.
 
@@ -69,5 +75,6 @@
 - [x] Muse: P4 polish & hardening (Nov 14, 2026) — difficulty select, save versioning + per-slot corruption isolation, key rebinding, credits roll + completion stamp; tests/typecheck/build/sim green.
 - [x] Muse: P5 ascension (Nov 14, 2026) — NG+ cycles, hardcore permadeath, lifetime stats; tests/typecheck/build/sim green. Built in the `play-p5` tree; merge with the Phase 6 tree is the parent step.
 - [x] Muse: P6 reach & refinement (Nov 14, 2026) — gamepad support, PWA/offline install, text size + pattern signals, contextual coach-marks, deterministic set-piece test; tests/typecheck/build green (gamepad unit-tested only, no hardware here).
-- [ ] Garth: review + push the P2 + P3 working tree; run the game once by hand (fresh expedition: does the tutorial read well, does the music sit right, does the ending land? Plus P3: find a Sealed Brazier Hall, a Spore Hulk, and Rowan's survey).
+- [x] Muse: P7 fix pack (Nov 14, 2026) — Ending Screen reachable after reload, SW runtime caching (`elfstory-shell-v2`), hp ≤ 0 loads route to GAME_OVER, `complete_quest` double-pay guard, stacked-consumable sell fix; implemented; tests + live smoke by Muse.
+- [ ] Garth: run the game once by hand (fresh expedition: does the tutorial read well, does the music sit right, does the ending land? Plus P3: find a Sealed Brazier Hall, a Spore Hulk, and Rowan's survey; plus gamepad + PWA install on a real device).
 - [ ] Garth: push the JPG commit from the Mac clone (see Open decisions #1).
