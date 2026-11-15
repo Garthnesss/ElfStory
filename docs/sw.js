@@ -1,13 +1,17 @@
-// ElfStory app-shell service worker (Phase 6 "reach & refinement").
+// ElfStory app-shell service worker (Phase 6 "reach & refinement",
+// Phase 7 offline fix).
 //
-// Cache-first for the static app shell; navigations fall back to the
-// cached index when the network is unreachable, so an installed copy
-// keeps working offline. All paths resolve against the registration
+// Navigations are network-first with a cached-index fallback, so an
+// online client always gets the fresh deploy and an offline one still
+// boots. Same-origin subresources (the hashed JS/CSS bundle, images,
+// the manifest) are cache-first and stored at runtime on first fetch —
+// without that, an installed copy offline had the shell HTML but no
+// application to run. All paths resolve against the registration
 // scope, so the same file works at a domain root or under a sub-path.
 // Bump the cache name to retire old shells; activation deletes every
 // other cache.
 
-const CACHE_NAME = 'elfstory-shell-v1';
+const CACHE_NAME = 'elfstory-shell-v2';
 const SHELL_PATHS = ['./', './index.html', './manifest.webmanifest', './icons/emblem.svg'];
 const shellUrl = (path) => new URL(path, self.registration.scope).toString();
 const INDEX_URL = shellUrl('./index.html');
@@ -43,8 +47,19 @@ self.addEventListener('fetch', (event) => {
     return;
   }
   event.respondWith(
-    caches
-      .match(request, { ignoreSearch: true })
-      .then((hit) => hit ?? fetch(request))
+    caches.match(request, { ignoreSearch: true }).then((hit) => {
+      if (hit) return hit;
+      return fetch(request).then((response) => {
+        // Runtime-cache same-origin assets (the app bundle above all) so
+        // the next offline boot has the whole game, not just the shell.
+        // Hashed bundle filenames make a stale copy impossible to serve
+        // for a new deploy: a new index references new asset URLs.
+        if (response.ok && new URL(request.url).origin === self.location.origin) {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+        }
+        return response;
+      });
+    })
   );
 });
