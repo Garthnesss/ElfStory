@@ -37,7 +37,7 @@
   - Autosave: local save every 25 turns while PLAYING + on tab hide/close (local-only); mute persisted (`elfstory-muted`), zoom persisted (`elfstory-tile-size`).
   - ErrorBoundary in `src/main.tsx`: a render crash now shows a recoverable "lantern guttered out" screen with reload, instead of a white page.
   - Not play-tested in a live browser by Muse (no browser on the VM reaches the local build) — the verification is test/typecheck/build + code-level repro closure. Garth's first run in the new repo is the by-hand check.
-- **Repo — LIVE** (Nov 14, 2026): **Garthnesss/ElfStory** (public). Remote `main` is at `0972af5` — all phases (P0–P7 source, the GitHub Pages builds in `docs/`, and the final audit report at the repo root) pushed by Muse via the official GitHub connector, and Pages verified serving the Phase 7 build. The 14 JPGs could not ride the text-only snapshot push; they were committed on the Mac clone and rebased onto `0972af5` as `7480cc8` — one `git push` from Garth's GUI Terminal (or `~/sync-all.sh`) lands them, after which a fresh clone builds. (The legacy gh-api route 401s; the official connector is the working route.)
+- **Repo — LIVE** (Nov 14, 2026): **Garthnesss/ElfStory** (public). Remote `main` is at `0972af5` — all phases (P0–P7 source, the GitHub Pages builds in `docs/`, and the final audit report at the repo root) pushed by Muse via the official GitHub connector, and Pages verified serving the Phase 7 build. The 14 JPGs turned out to already be in the repo (verified blob-identical against the Mac clone's local commit, which a rebase therefore dropped as empty) — the Mac clone sits exactly at remote `main`, clean, with nothing outstanding. (The legacy gh-api route 401s; the official connector is the working route.)
 - **P1 difficulty rebalance — DONE, VERIFIED** (Nov 14, 2026; `npm test` **17/17**, `tsc` clean, `vite build` clean; tuning verified with `tools/difficulty_sim.py`, which parses its constants from the game source so it cannot drift):
   - Normal enemies: base HP roughly ×2.3 and early ATK up — F1 trash now takes 2–3 hits instead of being one-shot, and F1–F2 hits register past starter DEF.
   - Story bosses scaled to expected arrival level: Vaelen 95→420 HP, Serath 145→690, Malakor 230→1000 HP / 24→36 ATK (TTK ≈ 8 / 8 / 10 basic attacks). Bell-weakened Malakor now loses 180 HP instead of 45.
@@ -65,7 +65,7 @@
 - Four canonical docs live in the project root (standing rule, Oct 28, 2026; applied to ElfStory Nov 14, 2026).
 
 ## Open decisions (need Garth's call)
-1. **Push the JPG commit** — Mac clone has `7480cc8` (the 14 portraits/backdrop, rebased onto remote main `0972af5`) committed and ready; needs one `git push` from the GUI Terminal (SSH sessions can't read the keychain) or a `~/sync-all.sh` run.
+1. ~~**Push the JPG commit**~~ — CLOSED Nov 14: the portraits/backdrop were already in the repo (blob-identical); the Mac clone's duplicate commit was dropped by rebase and the clone is level with remote `main`. Nothing to push.
 2. **By-hand play check** — P0 + P1 are test/sim/build-verified, not yet hand-played. First run: does F1 feel fair at 2–3 hits per enemy, and do the bosses feel like bosses?
 3. **Audit report in-repo?** — copy `elfstory-adversarial-audit.md` into the repo (e.g. `docs/`) or keep it in Garth's files only.
 
